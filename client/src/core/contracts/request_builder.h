@@ -1,0 +1,43 @@
+#pragma once
+
+#include <cstdint>
+#include <string>
+
+#include "client/src/core/contracts/rpc_requests.h"
+#include "client/src/core/contracts/transfer_session.h"
+#include "control_plane.pb.h"
+#include "us3_turbo_access/client/options.h"
+
+namespace us3_turbo_access::client {
+
+// 装配 OpenSessionRequest 所需的输入参数集合。
+struct OpenSessionInput {
+  OperationType operation;
+  RequestOptions request;
+  BufferType buffer_type;
+  DataPath path;
+  std::string memory_descriptor;
+};
+
+// 装配 ChunkTransferRequest 所需的输入参数集合。
+struct ChunkRpcInput {
+  OperationType operation;
+  RequestOptions request;
+  BufferType buffer_type;
+  DataPath path;
+  std::string request_id;
+  std::string session_id;
+  std::string ticket;
+  std::string rdma_token;
+  std::uint64_t chunk_offset{0};
+  std::size_t chunk_size{0};
+};
+
+[[nodiscard]] OpenSessionRequest BuildOpenSessionRequest(const ClientOptions& options,
+                                                          const OpenSessionInput& input);
+[[nodiscard]] ChunkTransferRequest BuildChunkRequest(const ClientOptions& options,
+                                                     ChunkRpcInput input);
+[[nodiscard]] TransferSession BuildSession(
+    const fusion_access::gateway::NegotiateTransferSessionResponse& response);
+
+}  // namespace us3_turbo_access::client

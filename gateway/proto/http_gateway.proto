@@ -1,0 +1,15 @@
+syntax = "proto2";
+
+package fusion_access.gateway;
+
+option cc_generic_services = true;
+
+message GatewayHttpRequest {
+}
+
+message GatewayHttpResponse {
+}
+
+service GatewayHttpService {
+  rpc default_method(GatewayHttpRequest) returns (GatewayHttpResponse);
+}

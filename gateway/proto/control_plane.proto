@@ -1,0 +1,82 @@
+syntax = "proto3";
+
+package fusion_access.gateway;
+
+option cc_generic_services = true;
+
+message TransferChunkPlanItem {
+  uint64 offset = 1;
+  uint64 size = 2;
+}
+
+message NegotiateTransferSessionRequest {
+  string request_id = 1;
+  string session_id = 2;
+  string bucket = 3;
+  string object_key = 4;
+  string op_type = 5;
+  string data_path = 6;
+  string buffer_type = 7;
+  string channel_id = 8;
+  uint64 offset = 9;
+  uint64 expected_size = 10;
+  string buffer_descriptor = 11;
+  string idempotency_key = 12;
+}
+
+message NegotiateTransferSessionResponse {
+  string request_id = 1;
+  string session_id = 2;
+  string ticket = 3;
+  string gateway_id = 4;
+  string gateway_endpoint = 5;
+  string channel_id = 6;
+  string async_handle = 7;
+  string expire_at = 8;
+  repeated TransferChunkPlanItem chunk_plan = 9;
+  map<string, string> rdma_parameters = 10;
+}
+
+message HeadObjectRequest {
+  string bucket = 1;
+  string object_key = 2;
+}
+
+message HeadObjectResponse {
+  uint64 content_length = 1;
+  string etag = 2;
+  string version = 3;
+  map<string, string> headers = 4;
+}
+
+message ExecuteGdsChunkRequest {
+  string request_id = 1;
+  string session_id = 2;
+  string transfer_ticket = 3;
+  string bucket = 4;
+  string object_key = 5;
+  string data_path = 6;
+  string buffer_type = 7;
+  string checksum_policy = 8;
+  uint64 chunk_offset = 9;
+  uint64 chunk_size = 10;
+  string rdma_token = 11;
+  map<string, string> extra_headers = 12;
+}
+
+message ExecuteGdsChunkResponse {
+  string selected_gateway = 1;
+  string gateway_id = 2;
+  string transfer_status = 3;
+  string rdma_reply = 4;
+  string etag = 5;
+  string version = 6;
+}
+
+service ControlPlaneService {
+  rpc NegotiateTransferSession(NegotiateTransferSessionRequest)
+      returns (NegotiateTransferSessionResponse);
+  rpc HeadObject(HeadObjectRequest) returns (HeadObjectResponse);
+  rpc ExecuteGdsGet(ExecuteGdsChunkRequest) returns (ExecuteGdsChunkResponse);
+  rpc ExecuteGdsPut(ExecuteGdsChunkRequest) returns (ExecuteGdsChunkResponse);
+}
