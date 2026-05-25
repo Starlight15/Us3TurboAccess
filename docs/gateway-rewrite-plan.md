@@ -264,7 +264,7 @@ class GatewayCore {
 class SessionStore {
  public:
   explicit SessionStore(std::string gateway_id, std::shared_ptr<spdlog::logger> log);
-  Result<std::shared_ptr<Session>> Create(const NegotiateRequest& req);
+  Result<std::shared_ptr<Session>> Create(const OpenSessionParams& req);
   Result<std::shared_ptr<Session>> Find(std::string_view session_id) const;
   Result<std::shared_ptr<Session>> Claim(std::string_view ticket);
   Result<bool>                      Commit(std::string_view session_id, const ObjectMeta&);
@@ -358,10 +358,10 @@ brpc http_master.default_method
 ### 8.2 GDS / native-rdma GET 协商 + 搬运
 
 ```
-[控制面]  brpc ControlPlaneService::NegotiateTransferSession
+[控制面]  brpc ControlPlaneService::OpenSession
  → SessionStore.Create
  → 若 native-rdma:RdmaEngine.PrepareSession 拿 addr/rkey/lkey
- → 返回 NegotiateTransferSessionResponse
+ → 返回 OpenSessionResponse
 
 [数据面]  HTTP GET 带 x-fa-session-id + x-amz-rdma-token
  → SessionStore.Find / Claim
@@ -394,7 +394,7 @@ SIGTERM
 
 | # | 范围 | DoD |
 |---|---|---|
-| **M1 协议骨架** | `infra/` + `backend/` + `SessionStore` + brpc Server 起来 + `ControlPlaneService.NegotiateTransferSession/Head` + `HttpFrontend` GET/PUT/HEAD 走 `MemoryBackend` | client 跑 HTTP 通路 PUT→GET 端到端通过;`/healthz` + brpc `/vars` 可访问;单测 ≥ 20 个 |
+| **M1 协议骨架** | `infra/` + `backend/` + `SessionStore` + brpc Server 起来 + `ControlPlaneService.OpenSession/Head` + `HttpFrontend` GET/PUT/HEAD 走 `MemoryBackend` | client 跑 HTTP 通路 PUT→GET 端到端通过;`/healthz` + brpc `/vars` 可访问;单测 ≥ 20 个 |
 | **M2 RDMA + GDS** | `RdmaEngine`(原生 verbs)+ `transports/gds/cuobj_session`(复用旧 cuObjServer 兼容层)+ `TransferEngine::RdmaGet/Put` | client 跑 native-rdma + gds-cuobject 端到端通过;RDMA 启动失败时降级 HTTP-only |
 | **M3 收尾** | 优雅停机完善 + e2e_test + bench(简单 wrk + bvar 截图) + README + 部署示例 | 24h soak 不漏内存;client 全部测例通过;文档完整 |
 

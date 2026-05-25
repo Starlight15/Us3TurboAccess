@@ -18,7 +18,7 @@ Result<bool> MetadataClient::Initialize() {
   if (!init.success()) {
     return init;
   }
-  stub_ = std::make_unique<fusion_access::gateway::ControlPlaneService_Stub>(channel_.channel());
+  stub_ = std::make_unique<us3_turbo_access::gateway::ControlPlaneService_Stub>(channel_.channel());
   return Result<bool>::Success(true);
 }
 
@@ -29,17 +29,17 @@ void MetadataClient::Shutdown() {
 
 bool MetadataClient::initialized() const { return channel_.ready() && stub_ != nullptr; }
 
-Result<fusion_access::gateway::NegotiateTransferSessionResponse>
-MetadataClient::OpenTransferSession(const OpenSessionRequest& request) const {
+Result<us3_turbo_access::gateway::OpenSessionResponse>
+MetadataClient::OpenTransferSession(const SessionOpening& request) const {
   if (!initialized()) {
-    return Result<fusion_access::gateway::NegotiateTransferSessionResponse>::Failure(
+    return Result<us3_turbo_access::gateway::OpenSessionResponse>::Failure(
         MakeNotInitialized("Metadata client"));
   }
 
   brpc::Controller controller;
   ApplyRequestHeaders(controller, request.context);
 
-  fusion_access::gateway::NegotiateTransferSessionRequest rpc_request;
+  us3_turbo_access::gateway::OpenSessionRequest rpc_request;
   rpc_request.set_request_id(request.request_id);
   rpc_request.set_session_id(request.session_id);
   rpc_request.set_bucket(request.object.bucket);
@@ -47,21 +47,19 @@ MetadataClient::OpenTransferSession(const OpenSessionRequest& request) const {
   rpc_request.set_op_type(std::string(ToString(request.operation)));
   rpc_request.set_data_path(std::string(ToString(request.data_path)));
   rpc_request.set_buffer_type(std::string(ToString(request.buffer_type)));
-  rpc_request.set_channel_id(request.channel_id);
   rpc_request.set_offset(request.offset);
   rpc_request.set_expected_size(request.length.value_or(0));
-  rpc_request.set_buffer_descriptor(request.buffer_descriptor);
   rpc_request.set_idempotency_key(request.idempotency_key);
 
-  fusion_access::gateway::NegotiateTransferSessionResponse rpc_response;
-  stub_->NegotiateTransferSession(&controller, &rpc_request, &rpc_response, nullptr);
+  us3_turbo_access::gateway::OpenSessionResponse rpc_response;
+  stub_->OpenSession(&controller, &rpc_request, &rpc_response, nullptr);
 
   auto status = CheckRpcFailure(controller, "Failed to open transfer session", request.data_path,
                                 request.request_id);
   if (!status.success()) {
-    return Result<fusion_access::gateway::NegotiateTransferSessionResponse>::Failure(status.error());
+    return Result<us3_turbo_access::gateway::OpenSessionResponse>::Failure(status.error());
   }
-  return Result<fusion_access::gateway::NegotiateTransferSessionResponse>::Success(
+  return Result<us3_turbo_access::gateway::OpenSessionResponse>::Success(
       std::move(rpc_response));
 }
 
@@ -71,7 +69,7 @@ Result<ObjectMetadata> MetadataClient::HeadObject(const ObjectId& object) const 
   }
 
   const ClientOptions& options = channel_.options();
-  const RpcRequestContext context{.client_id = options.client_id,
+  const RpcCallMetadata context{.client_id = options.client_id,
                                   .bearer_token = options.bearer_token,
                                   .default_headers = options.default_headers,
                                   .timeout = options.default_timeout};
@@ -79,11 +77,11 @@ Result<ObjectMetadata> MetadataClient::HeadObject(const ObjectId& object) const 
   brpc::Controller controller;
   ApplyRequestHeaders(controller, context);
 
-  fusion_access::gateway::HeadObjectRequest rpc_request;
+  us3_turbo_access::gateway::HeadObjectRequest rpc_request;
   rpc_request.set_bucket(object.bucket);
   rpc_request.set_object_key(object.key);
 
-  fusion_access::gateway::HeadObjectResponse rpc_response;
+  us3_turbo_access::gateway::HeadObjectResponse rpc_response;
   stub_->HeadObject(&controller, &rpc_request, &rpc_response, nullptr);
 
   auto status = CheckRpcFailure(controller, "HeadObject RPC failed", DataPath::kGdsCuObject, "");
@@ -99,6 +97,97 @@ Result<ObjectMetadata> MetadataClient::HeadObject(const ObjectId& object) const 
     metadata.headers[key] = value;
   }
   return Result<ObjectMetadata>::Success(std::move(metadata));
+}
+
+Result<StartUploadOutcome> MetadataClient::StartUpload(
+    const StartUploadOptions& opts) const {
+  if (!initialized()) {
+    return Result<StartUploadOutcome>::Failure(MakeNotInitialized("Metadata client"));
+  }
+  const ClientOptions& options = channel_.options();
+  const RpcCallMetadata context{.client_id = options.client_id,
+                                  .bearer_token = options.bearer_token,
+                                  .default_headers = options.default_headers,
+                                  .timeout = options.default_timeout};
+  brpc::Controller controller;
+  ApplyRequestHeaders(controller, context);
+
+  us3_turbo_access::gateway::StartUploadRequest req;
+  req.set_bucket(opts.object.bucket);
+  req.set_object_key(opts.object.key);
+  req.set_expected_total_size(static_cast<std::uint64_t>(opts.expected_total_size));
+  req.set_data_path(std::string(ToString(opts.data_path)));
+  req.set_idempotency_key(opts.idempotency_key);
+
+  us3_turbo_access::gateway::StartUploadResponse resp;
+  stub_->StartUpload(&controller, &req, &resp, nullptr);
+  auto status = CheckRpcFailure(controller, "StartUpload RPC failed", opts.data_path, "");
+  if (!status.success()) {
+    return Result<StartUploadOutcome>::Failure(status.error());
+  }
+  StartUploadOutcome out;
+  out.upload_id = resp.upload_id();
+  out.max_part_size = static_cast<std::size_t>(resp.max_part_size());
+  return Result<StartUploadOutcome>::Success(std::move(out));
+}
+
+Result<CompleteUploadOutcome> MetadataClient::CompleteUpload(
+    const std::string& upload_id,
+    const std::vector<PartCompletion>& parts) const {
+  if (!initialized()) {
+    return Result<CompleteUploadOutcome>::Failure(MakeNotInitialized("Metadata client"));
+  }
+  const ClientOptions& options = channel_.options();
+  const RpcCallMetadata context{.client_id = options.client_id,
+                                  .bearer_token = options.bearer_token,
+                                  .default_headers = options.default_headers,
+                                  .timeout = options.default_timeout};
+  brpc::Controller controller;
+  ApplyRequestHeaders(controller, context);
+
+  us3_turbo_access::gateway::CompleteUploadRequest req;
+  req.set_upload_id(upload_id);
+  for (const auto& p : parts) {
+    auto* pe = req.add_parts();
+    pe->set_part_number(p.part_number);
+    pe->set_etag(p.etag);
+  }
+  us3_turbo_access::gateway::CompleteUploadResponse resp;
+  stub_->CompleteUpload(&controller, &req, &resp, nullptr);
+  auto status = CheckRpcFailure(controller, "CompleteUpload RPC failed",
+                                DataPath::kGdsCuObject, "");
+  if (!status.success()) {
+    return Result<CompleteUploadOutcome>::Failure(status.error());
+  }
+  CompleteUploadOutcome out;
+  out.etag = resp.etag();
+  out.version = resp.version();
+  out.content_length = static_cast<std::size_t>(resp.content_length());
+  return Result<CompleteUploadOutcome>::Success(std::move(out));
+}
+
+Result<bool> MetadataClient::AbortUpload(const std::string& upload_id) const {
+  if (!initialized()) {
+    return Result<bool>::Failure(MakeNotInitialized("Metadata client"));
+  }
+  const ClientOptions& options = channel_.options();
+  const RpcCallMetadata context{.client_id = options.client_id,
+                                  .bearer_token = options.bearer_token,
+                                  .default_headers = options.default_headers,
+                                  .timeout = options.default_timeout};
+  brpc::Controller controller;
+  ApplyRequestHeaders(controller, context);
+
+  us3_turbo_access::gateway::AbortUploadRequest req;
+  req.set_upload_id(upload_id);
+  us3_turbo_access::gateway::AbortUploadResponse resp;
+  stub_->AbortUpload(&controller, &req, &resp, nullptr);
+  auto status = CheckRpcFailure(controller, "AbortUpload RPC failed",
+                                DataPath::kGdsCuObject, "");
+  if (!status.success()) {
+    return Result<bool>::Failure(status.error());
+  }
+  return Result<bool>::Success(true);
 }
 
 }  // namespace us3_turbo_access::client

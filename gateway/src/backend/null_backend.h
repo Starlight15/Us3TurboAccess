@@ -29,6 +29,25 @@ class NullBackend final : public IBackend {
     WriteRange(std::string_view bucket, std::string_view key,
                std::uint64_t offset, std::span<const std::byte> src,
                std::optional<std::size_t> total_size) override;
+
+  [[nodiscard]] Result<ObjectMetadata>
+    Reserve(std::string_view bucket, std::string_view key,
+            std::size_t total_size) override;
+
+  [[nodiscard]] Result<std::string>
+    StartMultipart(std::string_view bucket, std::string_view key,
+                   std::optional<std::size_t> total_size_hint) override;
+
+  [[nodiscard]] Result<std::string>
+    WritePart(std::string_view upload_id, std::uint32_t part_number,
+              std::uint64_t offset, std::span<const std::byte> src) override;
+
+  [[nodiscard]] Result<ObjectMetadata>
+    CompleteMultipart(std::string_view upload_id,
+                      const std::vector<PartRecord>& parts) override;
+
+  [[nodiscard]] Result<bool>
+    AbortMultipart(std::string_view upload_id) override;
 };
 
 }  // namespace us3_turbo_access::gateway::backend

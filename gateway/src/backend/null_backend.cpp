@@ -36,4 +36,30 @@ Result<ObjectMetadata> NullBackend::WriteRange(std::string_view,
   return Result<ObjectMetadata>::Success(MakeEmptyMeta());
 }
 
+Result<ObjectMetadata> NullBackend::Reserve(std::string_view, std::string_view,
+                                            std::size_t) {
+  return Result<ObjectMetadata>::Success(MakeEmptyMeta());
+}
+
+Result<std::string> NullBackend::StartMultipart(std::string_view,
+                                                std::string_view,
+                                                std::optional<std::size_t>) {
+  return Result<std::string>::Success("null-mpu");
+}
+
+Result<std::string> NullBackend::WritePart(std::string_view, std::uint32_t,
+                                           std::uint64_t,
+                                           std::span<const std::byte>) {
+  return Result<std::string>::Success("\"null-part\"");
+}
+
+Result<ObjectMetadata> NullBackend::CompleteMultipart(
+    std::string_view, const std::vector<PartRecord>&) {
+  return Result<ObjectMetadata>::Success(MakeEmptyMeta());
+}
+
+Result<bool> NullBackend::AbortMultipart(std::string_view) {
+  return Result<bool>::Success(true);
+}
+
 }  // namespace us3_turbo_access::gateway::backend

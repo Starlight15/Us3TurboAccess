@@ -9,6 +9,9 @@ namespace us3_turbo_access::client {
 
 class MetadataClient;
 class TransferRouter;
+class GdsDataClient;
+class GdsMemoryRegistry;
+class CuObjectClient;
 
 /**
  * @brief 内部装配体：拥有所有组件实例并管理生命周期。
@@ -32,6 +35,9 @@ class ClientCore {
   [[nodiscard]] const ClientOptions& options() const;
   [[nodiscard]] const MetadataClient& metadata_client() const;
   [[nodiscard]] const TransferRouter& transfer_router() const;
+  [[nodiscard]] GdsDataClient& gds_data_client();
+  [[nodiscard]] GdsMemoryRegistry& gds_memory_registry();
+  [[nodiscard]] const CuObjectClient& cuobj_client() const;
 
  private:
   struct Impl;

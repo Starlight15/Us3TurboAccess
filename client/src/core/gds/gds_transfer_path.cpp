@@ -12,7 +12,8 @@ namespace {
 }
 
 // 注册显存并向 gateway 协商出一个 TransferSession。
-// memory descriptor 必须先注册，否则 gateway 收不到有效的 buffer 描述。
+// memory_registry 验证 buffer 类型 / 非空，但 descriptor 字段已从 wire 协议
+// 移除（gateway 用不到），所以这里只走校验。
 template <typename BufferView>
 [[nodiscard]] Result<TransferSession> OpenSession(const GdsContext& context, OperationType op,
                                                    const RequestOptions& request,
@@ -22,19 +23,18 @@ template <typename BufferView>
     return Result<TransferSession>::Failure(registration.error());
   }
 
-  auto open_request = BuildOpenSessionRequest(context.options, OpenSessionInput{
+  auto open_request = MakeSessionHandshake(context.options, SessionPlan{
       .operation = op,
       .request = request,
       .buffer_type = buffer.type,
       .path = DataPath::kGdsCuObject,
-      .memory_descriptor = registration.value().memory_descriptor,
   });
 
   auto open_response = context.metadata_client.OpenTransferSession(open_request);
   if (!open_response.success()) {
     return Result<TransferSession>::Failure(open_response.error());
   }
-  return Result<TransferSession>::Success(BuildSession(open_response.value()));
+  return Result<TransferSession>::Success(ImportSession(open_response.value()));
 }
 
 }  // namespace

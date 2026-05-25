@@ -17,7 +17,7 @@ enum class OperationType {
 };
 
 /**
- * @brief Wire identifier of the data path negotiated with the client.
+ * @brief Wire identifier of the data path resolved with the client.
  *
  * Values mirror the strings the client SDK sends on the wire
  * (`http-tcp`, `native-rdma`, `gds-cuobject`).
@@ -40,14 +40,6 @@ struct ObjectMetadata {
   std::size_t content_length{0};
   std::string etag;
   std::string version;
-};
-
-/**
- * @brief Single chunk descriptor inside a negotiated transfer plan.
- */
-struct ChunkPlanItem {
-  std::uint64_t offset{0};
-  std::uint64_t size{0};
 };
 
 }  // namespace us3_turbo_access::gateway

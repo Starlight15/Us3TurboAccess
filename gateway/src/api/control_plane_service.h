@@ -14,62 +14,112 @@ class logger;
 }
 
 namespace us3_turbo_access::gateway::core {
-class Negotiator;
+class MetadataService;
+class SessionOpener;
 class SessionStore;
-class TransferEngine;
 }  // namespace us3_turbo_access::gateway::core
+
+namespace us3_turbo_access::gateway::core::multipart {
+class MultipartCoordinator;
+}  // namespace us3_turbo_access::gateway::core::multipart
 
 namespace us3_turbo_access::gateway::data_path::gds {
 class GdsExecutor;
 }  // namespace us3_turbo_access::gateway::data_path::gds
 
+namespace us3_turbo_access::gateway::runtime {
+class IoWorkerPool;
+}  // namespace us3_turbo_access::gateway::runtime
+
 namespace us3_turbo_access::gateway::api {
 
 /**
  * @brief brpc adapter that wires the gateway control-plane proto onto the
- *        core negotiator and the GDS executor.
+ *        core session_opener and the GDS executor.
  *
- * The proto package is `fusion_access.gateway` for wire compatibility with the
- * existing client SDK; this class only translates between protobuf messages
- * and core types — all session/path business logic lives in
- * @ref core::Negotiator and @ref data_path::gds::GdsExecutor.
+ * This class only translates between protobuf messages (package
+ * `us3_turbo_access.gateway`) and core types — all session / data-path
+ * business logic lives in @ref core::SessionOpener and
+ * @ref data_path::gds::GdsExecutor.
  */
-class ControlPlaneService final : public ::fusion_access::gateway::ControlPlaneService {
+class ControlPlaneService final : public ::us3_turbo_access::gateway::ControlPlaneService {
  public:
   ControlPlaneService(core::SessionStore& sessions,
-                      core::TransferEngine& transfers,
-                      core::Negotiator& negotiator,
+                      core::MetadataService& metadata,
+                      core::SessionOpener& session_opener,
                       data_path::gds::GdsExecutor* gds_executor,
+                      core::multipart::MultipartCoordinator& multipart,
+                      runtime::IoWorkerPool& io_pool,
                       std::shared_ptr<spdlog::logger> logger);
 
-  void NegotiateTransferSession(
+  void OpenSession(
       google::protobuf::RpcController* cntl,
-      const ::fusion_access::gateway::NegotiateTransferSessionRequest* request,
-      ::fusion_access::gateway::NegotiateTransferSessionResponse* response,
+      const ::us3_turbo_access::gateway::OpenSessionRequest* request,
+      ::us3_turbo_access::gateway::OpenSessionResponse* response,
       google::protobuf::Closure* done) override;
 
   void HeadObject(google::protobuf::RpcController* cntl,
-                  const ::fusion_access::gateway::HeadObjectRequest* request,
-                  ::fusion_access::gateway::HeadObjectResponse* response,
+                  const ::us3_turbo_access::gateway::HeadObjectRequest* request,
+                  ::us3_turbo_access::gateway::HeadObjectResponse* response,
                   google::protobuf::Closure* done) override;
 
-  void ExecuteGdsGet(
+  void GdsGet(
       google::protobuf::RpcController* cntl,
-      const ::fusion_access::gateway::ExecuteGdsChunkRequest* request,
-      ::fusion_access::gateway::ExecuteGdsChunkResponse* response,
+      const ::us3_turbo_access::gateway::GdsChunkRequest* request,
+      ::us3_turbo_access::gateway::GdsChunkResponse* response,
       google::protobuf::Closure* done) override;
 
-  void ExecuteGdsPut(
+  void GdsPut(
       google::protobuf::RpcController* cntl,
-      const ::fusion_access::gateway::ExecuteGdsChunkRequest* request,
-      ::fusion_access::gateway::ExecuteGdsChunkResponse* response,
+      const ::us3_turbo_access::gateway::GdsChunkRequest* request,
+      ::us3_turbo_access::gateway::GdsChunkResponse* response,
+      google::protobuf::Closure* done) override;
+
+  void StartUpload(
+      google::protobuf::RpcController* cntl,
+      const ::us3_turbo_access::gateway::StartUploadRequest* request,
+      ::us3_turbo_access::gateway::StartUploadResponse* response,
+      google::protobuf::Closure* done) override;
+
+  void CompleteUpload(
+      google::protobuf::RpcController* cntl,
+      const ::us3_turbo_access::gateway::CompleteUploadRequest* request,
+      ::us3_turbo_access::gateway::CompleteUploadResponse* response,
+      google::protobuf::Closure* done) override;
+
+  void AbortUpload(
+      google::protobuf::RpcController* cntl,
+      const ::us3_turbo_access::gateway::AbortUploadRequest* request,
+      ::us3_turbo_access::gateway::AbortUploadResponse* response,
       google::protobuf::Closure* done) override;
 
  private:
+  // 在 io_pool worker 线程上执行的 RPC handler 实现。
+  // OpenSession/GdsGet/GdsPut 的入口把闭包提交进 io_pool；这里是真正干活的函数。
+  void HandleOpenSession(
+      brpc::Controller* cntl,
+      const ::us3_turbo_access::gateway::OpenSessionRequest* request,
+      ::us3_turbo_access::gateway::OpenSessionResponse* response,
+      google::protobuf::Closure* done);
+
+  void HandleGdsGet(
+      brpc::Controller* cntl,
+      const ::us3_turbo_access::gateway::GdsChunkRequest* request,
+      ::us3_turbo_access::gateway::GdsChunkResponse* response,
+      google::protobuf::Closure* done);
+
+  void HandleGdsPut(
+      brpc::Controller* cntl,
+      const ::us3_turbo_access::gateway::GdsChunkRequest* request,
+      ::us3_turbo_access::gateway::GdsChunkResponse* response,
+      google::protobuf::Closure* done);
+
   core::SessionStore&              sessions_;
-  core::TransferEngine&            transfers_;
-  core::Negotiator&                negotiator_;
+  core::MetadataService&           metadata_;
+  core::SessionOpener&             session_opener_;
   data_path::gds::GdsExecutor*     gds_executor_{nullptr};
+  core::multipart::MultipartCoordinator& multipart_;
+  runtime::IoWorkerPool&           io_pool_;
   std::shared_ptr<spdlog::logger>  logger_;
 };
 

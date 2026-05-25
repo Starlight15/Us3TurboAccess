@@ -3,11 +3,13 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <string>
 #include <string_view>
 
 #include <spdlog/logger.h>
 
 #include "backend/backend.h"
+#include "data_path/data_path_executor.h"
 #include "us3_turbo_access/gateway/result.h"
 
 namespace brpc {
@@ -26,10 +28,6 @@ struct TransferReport {
 
 /**
  * @brief Editable view of the brpc controller used by the HTTP frontend.
- *
- * The executor writes the response attachment in place; status codes and
- * headers are set by the caller (frontend) after consulting the returned
- * report.
  */
 struct HttpResponseSink {
   brpc::Controller* controller{nullptr};
@@ -38,12 +36,11 @@ struct HttpResponseSink {
 /**
  * @brief HTTP / TCP server-side data-path executor.
  *
- * Owns the HTTP-specific transfer logic: chunked GET streamed into the brpc
- * controller, PUT body persisted to the backend. The TransferEngine routes
- * HTTP-path requests through this class; the HTTP frontend never talks to it
- * directly.
+ * 实现 IDataPathExecutor lifecycle（永远 available；endpoint 与 brpc port 由
+ * HttpFrontend 自然提供，这里报空）。数据面 Get/Put 直接被 HttpFrontend 调用，
+ * 不经 control plane。
  */
-class HttpExecutor {
+class HttpExecutor final : public IDataPathExecutor {
  public:
   HttpExecutor(backend::IBackend& backend,
                std::shared_ptr<spdlog::logger> logger);
@@ -51,19 +48,22 @@ class HttpExecutor {
   HttpExecutor(const HttpExecutor&) = delete;
   HttpExecutor& operator=(const HttpExecutor&) = delete;
 
-  /**
-   * @brief Streams object content from the backend into the HTTP response.
-   *
-   * The body is appended to the controller's attachment using a chunked loop
-   * to bound memory usage even for large reads.
-   */
+  // IDataPathExecutor
+  [[nodiscard]] DataPath kind() const noexcept override {
+    return DataPath::kHttpTcp;
+  }
+  [[nodiscard]] bool available() const override { return true; }
+  [[nodiscard]] std::string endpoint() const override { return {}; }
+  [[nodiscard]] Result<bool> Start() override {
+    return Result<bool>::Success(true);
+  }
+  void Stop() override {}
+
+  // HTTP-specific data plane
   [[nodiscard]] Result<TransferReport>
     Get(std::string_view bucket, std::string_view key, std::uint64_t offset,
         std::uint64_t length, HttpResponseSink sink);
 
-  /**
-   * @brief Persists the HTTP request body into the backend.
-   */
   [[nodiscard]] Result<TransferReport>
     Put(std::string_view bucket, std::string_view key,
         std::span<const std::byte> body);

@@ -23,6 +23,16 @@ ChunkDispatcher::ChunkDispatcher(const ClientOptions& options, const GdsDataClie
       session_id_(session.meta.session_id),
       ticket_(session.meta.ticket) {}
 
+// 进入 multipart 模式，记录 part 起点用于将绝对偏移转为 part 内偏移。
+void ChunkDispatcher::SetMultipart(std::string upload_id,
+                                   std::uint32_t part_number) {
+  upload_id_ = std::move(upload_id);
+  part_number_ = part_number;
+  part_base_offset_ = request_.offset;
+}
+
+// 每个 cuObj chunk 回调发一条 GdsGet/GdsPut RPC。
+// multipart 模式下需将绝对偏移转为 part 内偏移。
 Result<ChunkDispatcher::Outcome> ChunkDispatcher::Dispatch(const std::string& rdma_token,
                                                             std::uint64_t chunk_offset,
                                                             std::size_t chunk_size) const {
@@ -30,7 +40,7 @@ Result<ChunkDispatcher::Outcome> ChunkDispatcher::Dispatch(const std::string& rd
     return Result<Outcome>::Failure(MakeMissingRdmaTokenError(request_id_));
   }
 
-  ChunkTransferRequest chunk_req = BuildChunkRequest(options_, ChunkRpcInput{
+  ChunkOp chunk_req = MakeChunkOp(options_, ChunkOpPlan{
       .operation = op_,
       .request = request_,
       .buffer_type = BufferType::kCudaDevice,
@@ -39,11 +49,15 @@ Result<ChunkDispatcher::Outcome> ChunkDispatcher::Dispatch(const std::string& rd
       .session_id = session_id_,
       .ticket = ticket_,
       .rdma_token = rdma_token,
-      .chunk_offset = chunk_offset,
+      .chunk_offset = upload_id_.empty()
+                        ? chunk_offset                       // 单对象：绝对偏移
+                        : chunk_offset - part_base_offset_,  // multipart：part 内偏移
       .chunk_size = chunk_size,
+      .upload_id = upload_id_,
+      .part_number = part_number_,
   });
 
-  auto response = data_client_.ExecuteGdsChunk(chunk_req);
+  auto response = data_client_.GdsChunk(chunk_req);
   if (!response.success()) {
     return Result<Outcome>::Failure(response.error());
   }

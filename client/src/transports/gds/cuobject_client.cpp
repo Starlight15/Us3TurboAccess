@@ -6,9 +6,11 @@
 #include <cstring>
 #include <exception>
 #include <iostream>
+#include <mutex>
 #include <new>
 #include <optional>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <utility>
 
@@ -23,6 +25,8 @@
 namespace us3_turbo_access::client {
 namespace {
 
+// cuObjClient 实例的 RAII 容器：构造时 api.constructor 就地构造，
+// 析构时 api.destructor 反向销毁。
 class CuObjClientHandle {
  public:
   CuObjClientHandle(const CuObjApi& api, CUObjOps_t ops) : api_(api) {
@@ -36,12 +40,38 @@ class CuObjClientHandle {
     }
   }
 
+  CuObjClientHandle(const CuObjClientHandle&) = delete;
+  CuObjClientHandle& operator=(const CuObjClientHandle&) = delete;
+
   [[nodiscard]] void* raw() { return &storage_; }
 
  private:
   const CuObjApi& api_;
   bool constructed_{false};
   alignas(alignof(cuObjClient)) std::byte storage_[std::max(sizeof(cuObjClient), std::size_t{4096})];
+};
+
+// cuObj 描述符 RAII 守卫：cuMemObjGetDescriptor 注册的 GPU buffer
+// 必须在传输结束后通过 cuMemObjPutDescriptor 释放，析构时自动调用。
+class CuObjDescriptorGuard {
+ public:
+  CuObjDescriptorGuard(const CuObjApi& api, void* client_object,
+                       void* registered_buffer)
+      : api_(api),
+        client_object_(client_object),
+        registered_buffer_(registered_buffer) {}
+
+  ~CuObjDescriptorGuard() {
+    api_.put_descriptor(client_object_, registered_buffer_);
+  }
+
+  CuObjDescriptorGuard(const CuObjDescriptorGuard&) = delete;
+  CuObjDescriptorGuard& operator=(const CuObjDescriptorGuard&) = delete;
+
+ private:
+  const CuObjApi& api_;
+  void* client_object_;
+  void* registered_buffer_;
 };
 
 struct CuObjCallbackContext {
@@ -122,6 +152,12 @@ ssize_t CuObjPutCallback(const void* handle, const char* ptr, size_t size, loff_
   return ExecuteControlCallback(context, size, offset, rdma_info);
 }
 
+/**
+ * 单次 GDS 数据面传输的总驱动。
+ * 装配 cuObjClient → 注册 GPU buffer → 触发 cuObj GET/PUT，
+ * cuObj 内部按 chunk 回调 ChunkDispatcher 发 GdsGet/GdsPut RPC。
+ * upload_id 非空时切换为 multipart 模式，chunk 走 PutPart 而非 PutChunk。
+ */
 template <typename BufferPointer>
 [[nodiscard]] Result<TransferOutcome> ExecuteTransfer(const ClientOptions& options,
                                                       const GdsDataClient& data_client,
@@ -129,9 +165,12 @@ template <typename BufferPointer>
                                                       const RequestOptions& request,
                                                       BufferPointer buffer,
                                                       std::size_t buffer_size,
-                                                      OperationType op) {
+                                                      OperationType op,
+                                                      const std::string& upload_id = {},
+                                                      std::uint32_t part_number = 0) {
   CuObjCallbackContext context;
   try {
+    // 1. 加载 cuObjClient 动态库并解析符号
     auto library = CuObjLibrary::Get();
     if (!library.success()) {
       return Result<TransferOutcome>::Failure(library.error());
@@ -139,30 +178,44 @@ template <typename BufferPointer>
     const auto& api = library.value()->api();
     auto* mutable_buffer = const_cast<void*>(static_cast<const void*>(buffer));
 
+    // 2. 装配 cuObj 回调函数表（GET / PUT 用同一份 dispatcher）
     CUObjOps_t ops{};
     ops.get = &CuObjGetCallback;
     ops.put = &CuObjPutCallback;
 
+    /* 3. 进程级串行化 cuObj 调用。
+     *    cuObjClient SDK 内部 descriptor 表是 process-wide 共享，
+     *    并发调用会让 cuMemObjGetDescriptor 失败。 */
+    static std::mutex g_cuobj_global_mu;
+    std::scoped_lock<std::mutex> cuobj_lock(g_cuobj_global_mu);
+
+    // 4. 构造 cuObjClient 实例并校验 RDMA 连通性
     CuObjClientHandle client(api, ops);
     if (!api.is_connected(client.raw())) {
       return Result<TransferOutcome>::Failure(
-          MakeCuObjError(session.meta.request_id, "cuObjClient is not connected to an available RDMA service", true));
+          MakeCuObjError(session.meta.request_id,
+                         "cuObjClient 未连接到可用的 RDMA 服务", true));
     }
+
+    // 5. 注册 GPU buffer 到 cuObj descriptor 表；RAII 守卫保证释放
     if (api.get_descriptor(client.raw(), mutable_buffer, buffer_size) != CU_OBJ_SUCCESS) {
       return Result<TransferOutcome>::Failure(
-          MakeCuObjError(session.meta.request_id, "cuMemObjGetDescriptor registration failed", true));
+          MakeCuObjError(session.meta.request_id,
+                         "cuMemObjGetDescriptor 注册失败", true));
+    }
+    CuObjDescriptorGuard descriptor_guard(api, client.raw(), mutable_buffer);
+
+    /* 6. 装配 ChunkDispatcher：每次 cuObj chunk 回调对应一条 RPC。
+     *    upload_id 非空时切到 multipart 模式：chunk_offset 按 part 内偏移上报，
+     *    并带上 upload_id + part_number，gateway 据此走 WritePart 而非 WriteRange。 */
+    ChunkDispatcher dispatcher(options, data_client, session, request, op);
+    if (!upload_id.empty()) {
+      dispatcher.SetMultipart(upload_id, part_number);
     }
 
-    struct DescriptorGuard {
-      DescriptorGuard(const CuObjApi& api, void* client_object, void* registered_buffer)
-          : api(api), client_object(client_object), registered_buffer(registered_buffer) {}
-      ~DescriptorGuard() { api.put_descriptor(client_object, registered_buffer); }
-      const CuObjApi& api;
-      void* client_object;
-      void* registered_buffer;
-    } descriptor_guard(api, client.raw(), mutable_buffer);
-
-    ChunkDispatcher dispatcher(options, data_client, session, request, op);
+    /* 7. 初始化 callback 上下文。
+     *    context 必须在整个 cuObjGet/cuObjPut 调用期内保持有效，
+     *    cuObj 回调线程会持续读写其内的 dispatcher / outcome。 */
     context.dispatcher = &dispatcher;
     context.base_offset = request.offset;
     context.outcome.selected_path = DataPath::kGdsCuObject;
@@ -170,28 +223,34 @@ template <typename BufferPointer>
     context.outcome.session_id = session.meta.session_id;
     context.outcome.gateway_id = session.meta.gateway_id;
 
-    // context 必须在整个 cuObjGet/cuObjPut 调用期内保持有效，callback 持续读写其内容。
+    // 8. 校验请求字节数（取 request.length 与 buffer_size 的较小值）
     const auto req_bytes = static_cast<std::size_t>(
         std::min<std::uint64_t>(request.length.value_or(buffer_size), buffer_size));
     if (req_bytes == 0U) {
       return Result<TransferOutcome>::Failure(MakeCuObjError(
-          session.meta.request_id, "requested_bytes is zero; cannot execute a GDS transfer", false));
+          session.meta.request_id,
+          "请求字节数为零，无法发起 GDS 传输", false));
     }
 
+    // 9. 同步驱动 cuObj 传输；返回前 dispatcher 已经把所有 chunk RPC 发完
     const ssize_t result = op == OperationType::kGet
                                ? api.cuobj_get(client.raw(), &context, mutable_buffer, req_bytes, 0, 0)
                                : api.cuobj_put(client.raw(), &context, mutable_buffer, req_bytes, 0, 0);
 
+    /* 10. 错误判定：callback 内部失败优先（带 RPC 层错误信息），
+     *     其次才看 cuObj 自身返回码。 */
     if (context.callback_err.has_value()) {
       return Result<TransferOutcome>::Failure(*context.callback_err);
     }
     if (result < 0) {
       return Result<TransferOutcome>::Failure(
           MakeCuObjError(session.meta.request_id,
-                         op == OperationType::kGet ? "cuObjGet execution failed" : "cuObjPut execution failed",
+                         op == OperationType::kGet ? "cuObjGet 执行失败"
+                                                   : "cuObjPut 执行失败",
                          true));
     }
 
+    // 11. 汇总传输结果，回调可选的 progress notifier
     context.outcome.bytes_transferred = static_cast<std::size_t>(result);
     if (context.outcome.transfer_status.empty()) {
       context.outcome.transfer_status = "completed";
@@ -201,6 +260,8 @@ template <typename BufferPointer>
                                  .bytes_total = context.outcome.bytes_transferred,
                                  .data_path = DataPath::kGdsCuObject});
     }
+
+    // 12. 返回成功 outcome
     return Result<TransferOutcome>::Success(std::move(context.outcome));
   } catch (const std::bad_alloc& e) {
     if (context.callback_err.has_value()) {
@@ -236,6 +297,15 @@ Result<TransferOutcome> CuObjectClient::ExecutePut(const ClientOptions& options,
                                                    ConstBufferView buffer) const {
   return ExecuteTransfer(options, data_client, session, request, buffer.data, buffer.size,
                          OperationType::kPut);
+}
+
+Result<TransferOutcome> CuObjectClient::ExecutePutPart(
+    const ClientOptions& options, const GdsDataClient& data_client,
+    const TransferSession& session, const RequestOptions& request,
+    ConstBufferView buffer, const std::string& upload_id,
+    std::uint32_t part_number) const {
+  return ExecuteTransfer(options, data_client, session, request, buffer.data,
+                         buffer.size, OperationType::kPut, upload_id, part_number);
 }
 
 }  // namespace us3_turbo_access::client

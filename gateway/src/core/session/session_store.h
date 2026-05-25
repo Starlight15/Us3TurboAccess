@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <memory>
@@ -10,33 +11,26 @@
 
 #include <spdlog/logger.h>
 
-#include "core/session/rdma_parameters.h"
 #include "core/session/session.h"
 #include "us3_turbo_access/gateway/result.h"
 
 namespace us3_turbo_access::gateway::core {
 
 /**
- * @brief In-memory registry of active transfer sessions.
+ * @brief In-memory registry of active transfer sessions, sharded for
+ *        concurrency.
  *
- * Holds session metadata, ticket lookup, and basic state-machine transitions.
- * One `std::mutex` protects all three index maps; this is enough for the M1
- * scale target (≤ tens of thousands of concurrent sessions). Sharding is
- * deferred until contention is observed.
+ * 内部按 64 个 shard 切分，每个 shard 维护 (by_id, by_ticket, by_idempotency)
+ * 三张本地索引 + 一把 std::mutex。同一个 Session 的副本可能同时出现在不同
+ * shard 上（按 session_id / ticket / idempotency_key 各自哈希）；shared_ptr
+ * 兜底引用计数，sweep / expire 时一并清理。
  */
 class SessionStore {
  public:
-  SessionStore(std::string gateway_id, std::string gateway_endpoint,
-               std::size_t default_chunk_size, std::chrono::seconds session_ttl,
+  SessionStore(std::string gateway_id, std::chrono::seconds session_ttl,
                std::shared_ptr<spdlog::logger> logger);
 
-  /**
-   * @brief Creates and registers a new session.
-   *
-   * Honours @p req.idempotency_key when supplied. When a previous session
-   * already exists for the same key, that record is returned unchanged.
-   */
-  [[nodiscard]] Result<std::shared_ptr<Session>> Create(const NegotiateRequest& req);
+  [[nodiscard]] Result<std::shared_ptr<Session>> Create(const OpenSessionParams& req);
 
   [[nodiscard]] Result<std::shared_ptr<Session>>
     Find(std::string_view session_id) const;
@@ -44,20 +38,18 @@ class SessionStore {
   [[nodiscard]] Result<std::shared_ptr<Session>>
     FindByTicket(std::string_view ticket) const;
 
-  /**
-   * @brief Atomically transitions a session into kClaimed.
-   *
-   * Returns kStaleState when the session is not in a claimable state, and
-   * kTicketInvalid when the ticket does not resolve to a known session.
-   */
   [[nodiscard]] Result<std::shared_ptr<Session>>
     Claim(std::string_view ticket);
 
-  /**
-   * @brief Records that the data path has begun executing.
-   */
   [[nodiscard]] Result<std::shared_ptr<Session>>
     MarkActive(std::string_view session_id);
+
+  /**
+   * @brief Idempotent activation: CAS kOpened→kActive; no-op if already active.
+   *        Returns the session if found, even when no transition happened.
+   */
+  [[nodiscard]] Result<std::shared_ptr<Session>>
+    BumpActive(std::string_view session_id);
 
   [[nodiscard]] Result<std::shared_ptr<Session>>
     MarkCompleted(std::string_view session_id);
@@ -65,35 +57,29 @@ class SessionStore {
   [[nodiscard]] Result<std::shared_ptr<Session>>
     MarkFailed(std::string_view session_id);
 
-  /**
-   * @brief Replaces a session's strongly-typed RDMA parameters.
-   */
-  void UpdateRdmaParameters(std::string_view session_id,
-                            const RdmaParameters& parameters);
-
-  /**
-   * @brief Drops sessions whose expire_deadline has elapsed.
-   *
-   * Returns the number of evictions; intended for periodic invocation by a
-   * background sweeper in M2/M3.
-   */
   std::size_t SweepExpired(std::chrono::steady_clock::time_point now);
 
  private:
+  static constexpr std::size_t kShardCount = 64;
+
+  struct Shard {
+    mutable std::mutex                                          mu;
+    std::unordered_map<std::string, std::shared_ptr<Session>>   by_id;
+    std::unordered_map<std::string, std::shared_ptr<Session>>   by_ticket;
+    std::unordered_map<std::string, std::shared_ptr<Session>>   by_idempotency;
+  };
+
   Result<std::shared_ptr<Session>>
     Transition(std::string_view session_id, SessionState expected,
                SessionState desired, ErrorCode failure_code);
 
-  std::shared_ptr<spdlog::logger> logger_;
-  std::string                     gateway_id_;
-  std::string                     gateway_endpoint_;
-  std::size_t                     default_chunk_size_{0};
-  std::chrono::seconds            session_ttl_{0};
+  [[nodiscard]] Shard& ShardFor(std::string_view key) const;
 
-  mutable std::mutex                                                   mu_;
-  std::unordered_map<std::string, std::shared_ptr<Session>>           by_id_;
-  std::unordered_map<std::string, std::string>                        by_ticket_;
-  std::unordered_map<std::string, std::shared_ptr<Session>>           by_idempotency_;
+  std::shared_ptr<spdlog::logger>     logger_;
+  std::string                         gateway_id_;
+  std::chrono::seconds                session_ttl_{0};
+
+  mutable std::array<Shard, kShardCount> shards_{};
 };
 
 }  // namespace us3_turbo_access::gateway::core

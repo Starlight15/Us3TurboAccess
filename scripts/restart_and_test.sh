@@ -6,8 +6,8 @@
 set -u
 set -o pipefail
 
-GATEWAY_BIN="${GATEWAY_BIN:-/mnt/n0test/xinghui.shao/gds/Us3TurboAccess/build/gateway/us3_turbo_access_gateway}"
-EXAMPLE_BIN="${EXAMPLE_BIN:-/mnt/n0test/xinghui.shao/gds/Us3TurboAccess/build/examples/us3_turbo_access_gds_example}"
+GATEWAY_BIN="${GATEWAY_BIN:-/mnt/n0test/xinghui.shao/gds/Us3TurboAccess/build-local/gateway/us3_turbo_access_gateway}"
+EXAMPLE_BIN="${EXAMPLE_BIN:-/mnt/n0test/xinghui.shao/gds/Us3TurboAccess/build-local/examples/us3_turbo_access_gds_example}"
 
 BRPC_PORT="${BRPC_PORT:-${HTTP_PORT:-18082}}"
 RDMA_PORT="${RDMA_PORT:-18535}"

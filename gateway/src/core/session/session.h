@@ -4,19 +4,21 @@
 #include <chrono>
 #include <cstdint>
 #include <string>
-#include <vector>
 
-#include "core/session/rdma_parameters.h"
 #include "us3_turbo_access/gateway/types.h"
 
 namespace us3_turbo_access::gateway::core {
 
 /**
  * @brief Lifecycle phase of a transfer session.
+ *
+ * kOpened/kActive/kCompleted/kFailed/kExpired are wired today.
+ * kClaimed is reserved for the native-RDMA path (M2): peer claims the ticket
+ * before activating its QP.
  */
 enum class SessionState : std::uint8_t {
-  kNegotiated,
-  kClaimed,
+  kOpened,
+  kClaimed,    // reserved: native-RDMA peer has claimed the ticket
   kActive,
   kCompleted,
   kFailed,
@@ -24,9 +26,9 @@ enum class SessionState : std::uint8_t {
 };
 
 /**
- * @brief Parameters supplied when negotiating a new session.
+ * @brief Parameters supplied when building a new session.
  */
-struct NegotiateRequest {
+struct OpenSessionParams {
   std::string   session_id;
   std::string   request_id;
   std::string   bucket;
@@ -34,14 +36,13 @@ struct NegotiateRequest {
   OperationType op{OperationType::kGet};
   DataPath      data_path{DataPath::kHttpTcp};
   std::string   buffer_type{"host-regular"};
-  std::string   channel_id{"channel-0"};
   std::uint64_t offset{0};
   std::uint64_t expected_size{0};
   std::string   idempotency_key;
 };
 
 /**
- * @brief Snapshot of a negotiated transfer session.
+ * @brief Snapshot of a resolved transfer session.
  *
  * Owned by `SessionStore`; consumers receive `std::shared_ptr<Session>` and
  * must treat state writes via store-provided helpers, not by reaching in.
@@ -51,9 +52,6 @@ struct Session {
   std::string                          request_id;
   std::string                          ticket;
   std::string                          gateway_id;
-  std::string                          gateway_endpoint;
-  std::string                          channel_id;
-  std::string                          async_handle;
   std::string                          expire_at;
   std::string                          bucket;
   std::string                          object_key;
@@ -62,11 +60,9 @@ struct Session {
   std::string                          buffer_type;
   std::uint64_t                        offset{0};
   std::uint64_t                        expected_size{0};
-  std::vector<ChunkPlanItem>           chunk_plan;
-  RdmaParameters                       rdma_parameters;
   std::string                          idempotency_key;
 
-  std::atomic<SessionState>            state{SessionState::kNegotiated};
+  std::atomic<SessionState>            state{SessionState::kOpened};
   std::chrono::steady_clock::time_point expire_deadline{};
 };
 

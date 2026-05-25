@@ -5,15 +5,20 @@
 #include "us3_turbo_access/gateway/result.h"
 #include "us3_turbo_access/gateway/types.h"
 
+namespace us3_turbo_access::gateway::core {
+class Session;
+}  // namespace us3_turbo_access::gateway::core
+
 namespace us3_turbo_access::gateway::data_path {
 
 /**
  * @brief Common contract for every server-side data-path implementation
- *        (GDS / native RDMA / future variants).
+ *        (HTTP / GDS / native RDMA / future variants).
  *
  * Concrete executors expose path-specific transfer methods on top of this
- * interface. The interface itself only covers what the runtime needs to
- * manage lifecycle and what the control plane needs to expose to clients.
+ * interface. The interface covers what the runtime needs to manage lifecycle,
+ * what the control plane needs to expose to clients, and the per-session
+ * negotiation hook called by SessionOpener when a session is created.
  */
 class IDataPathExecutor {
  public:
@@ -36,6 +41,17 @@ class IDataPathExecutor {
 
   /** @brief Release the transport. Idempotent. */
   virtual void Stop() = 0;
+
+  /**
+   * @brief Called by SessionOpener right after the session is registered.
+   *
+   * Implementations can perform path-specific setup (backend reservation,
+   * availability check, ...). Returning a failure aborts the open.
+   *
+   * Default implementation: no-op, returns success.
+   */
+  [[nodiscard]] virtual Result<bool>
+    OnSessionOpened(const core::Session& session);
 
  protected:
   IDataPathExecutor() = default;

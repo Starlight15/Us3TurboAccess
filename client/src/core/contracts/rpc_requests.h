@@ -26,8 +26,8 @@ struct ObjectRequest {
 /**
  * @brief Request payload for MetadataClient::OpenTransferSession.
  */
-struct OpenSessionRequest {
-  RpcRequestContext context;
+struct SessionOpening {
+  RpcCallMetadata context;
   OperationType operation{OperationType::kGet};
   ObjectId object;
   DataPath data_path{DataPath::kGdsCuObject};
@@ -36,16 +36,14 @@ struct OpenSessionRequest {
   std::optional<std::uint64_t> length;
   std::string request_id;
   std::string session_id;
-  std::string channel_id;
-  std::string buffer_descriptor;
   std::string idempotency_key;
 };
 
 /**
- * @brief Request payload for GdsDataClient::ExecuteGdsChunk.
+ * @brief Request payload for GdsDataClient::GdsChunk.
  */
-struct ChunkTransferRequest {
-  RpcRequestContext context;
+struct ChunkOp {
+  RpcCallMetadata context;
   ObjectRequest object;
   OperationType operation{OperationType::kGet};
   std::string request_id;
@@ -54,6 +52,8 @@ struct ChunkTransferRequest {
   std::string rdma_token;
   std::uint64_t chunk_offset{0};
   std::size_t chunk_size{0};
+  std::string upload_id;       // empty for non-multipart
+  std::uint32_t part_number{0};
 };
 
 }  // namespace us3_turbo_access::client

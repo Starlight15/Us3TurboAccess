@@ -11,7 +11,7 @@ std::string TrimTrailingSlash(std::string endpoint) {
   return endpoint;
 }
 
-void ApplyRequestHeaders(brpc::Controller& controller, const RpcRequestContext& context) {
+void ApplyRequestHeaders(brpc::Controller& controller, const RpcCallMetadata& context) {
   for (const auto& [key, value] : context.default_headers) {
     controller.http_request().SetHeader(key, value);
   }

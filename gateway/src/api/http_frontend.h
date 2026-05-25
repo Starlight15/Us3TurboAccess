@@ -14,9 +14,12 @@ class logger;
 }
 
 namespace us3_turbo_access::gateway::core {
-class SessionStore;
-class TransferEngine;
+class MetadataService;
 }  // namespace us3_turbo_access::gateway::core
+
+namespace us3_turbo_access::gateway::data_path::http {
+class HttpExecutor;
+}  // namespace us3_turbo_access::gateway::data_path::http
 
 namespace us3_turbo_access::gateway::api {
 
@@ -32,19 +35,20 @@ namespace us3_turbo_access::gateway::api {
  * The same handlers also accept the unversioned `/objects/...` form to ease
  * client migration.
  */
-class HttpFrontend final : public ::fusion_access::gateway::GatewayHttpService {
+class HttpFrontend final : public ::us3_turbo_access::gateway::GatewayHttpService {
  public:
-  HttpFrontend(std::string gateway_id, core::SessionStore& sessions,
-               core::TransferEngine& transfers,
+  HttpFrontend(std::string gateway_id, core::MetadataService& metadata,
+               data_path::http::HttpExecutor& http,
                std::shared_ptr<spdlog::logger> logger);
 
   void default_method(google::protobuf::RpcController* cntl,
-                      const ::fusion_access::gateway::GatewayHttpRequest* request,
-                      ::fusion_access::gateway::GatewayHttpResponse* response,
+                      const ::us3_turbo_access::gateway::GatewayHttpRequest* request,
+                      ::us3_turbo_access::gateway::GatewayHttpResponse* response,
                       google::protobuf::Closure* done) override;
 
  private:
   void HandleHealth(brpc::Controller* cntl);
+  void HandleVars(brpc::Controller* cntl, const std::string& path);
   void HandleHead(brpc::Controller* cntl, const std::string& bucket,
                   const std::string& key);
   void HandleGet(brpc::Controller* cntl, const std::string& bucket,
@@ -52,10 +56,10 @@ class HttpFrontend final : public ::fusion_access::gateway::GatewayHttpService {
   void HandlePut(brpc::Controller* cntl, const std::string& bucket,
                  const std::string& key);
 
-  std::string                     gateway_id_;
-  core::SessionStore&             sessions_;
-  core::TransferEngine&           transfers_;
-  std::shared_ptr<spdlog::logger> logger_;
+  std::string                          gateway_id_;
+  core::MetadataService&               metadata_;
+  data_path::http::HttpExecutor&       http_;
+  std::shared_ptr<spdlog::logger>      logger_;
 };
 
 }  // namespace us3_turbo_access::gateway::api

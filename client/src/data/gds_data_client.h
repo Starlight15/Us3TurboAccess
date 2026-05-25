@@ -18,12 +18,12 @@ class GdsDataClient {
   void Shutdown();
   [[nodiscard]] bool initialized() const;
 
-  [[nodiscard]] Result<fusion_access::gateway::ExecuteGdsChunkResponse> ExecuteGdsChunk(
-      const ChunkTransferRequest& request) const;
+  [[nodiscard]] Result<us3_turbo_access::gateway::GdsChunkResponse> GdsChunk(
+      const ChunkOp& request) const;
 
  private:
   BrpcChannel channel_;
-  std::unique_ptr<fusion_access::gateway::ControlPlaneService_Stub> stub_;
+  std::unique_ptr<us3_turbo_access::gateway::ControlPlaneService_Stub> stub_;
 };
 
 }  // namespace us3_turbo_access::client

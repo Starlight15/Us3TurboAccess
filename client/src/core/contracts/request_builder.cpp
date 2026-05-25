@@ -22,9 +22,9 @@ constexpr char kDefaultGatewayId[] = "gateway-local";
   return std::string(prefix) + buf;
 }
 
-[[nodiscard]] RpcRequestContext MakeRpcContext(const ClientOptions& options,
+[[nodiscard]] RpcCallMetadata MakeRpcContext(const ClientOptions& options,
                                                 std::chrono::milliseconds timeout) {
-  return RpcRequestContext{.client_id = options.client_id,
+  return RpcCallMetadata{.client_id = options.client_id,
                            .bearer_token = options.bearer_token,
                            .default_headers = options.default_headers,
                            .timeout = timeout};
@@ -32,9 +32,9 @@ constexpr char kDefaultGatewayId[] = "gateway-local";
 
 }  // namespace
 
-OpenSessionRequest BuildOpenSessionRequest(const ClientOptions& options,
-                                            const OpenSessionInput& input) {
-  return OpenSessionRequest{
+SessionOpening MakeSessionHandshake(const ClientOptions& options,
+                                            const SessionPlan& input) {
+  return SessionOpening{
       .context = MakeRpcContext(options, input.request.timeout),
       .operation = input.operation,
       .object = input.request.object,
@@ -44,13 +44,11 @@ OpenSessionRequest BuildOpenSessionRequest(const ClientOptions& options,
       .length = input.request.length,
       .request_id = MakeId(kRequestIdPrefix),
       .session_id = MakeId(kSessionIdPrefix),
-      .channel_id = "",
-      .buffer_descriptor = input.memory_descriptor,
       .idempotency_key = input.request.idempotency_key,
   };
 }
 
-ChunkTransferRequest BuildChunkRequest(const ClientOptions& options, ChunkRpcInput input) {
+ChunkOp MakeChunkOp(const ClientOptions& options, ChunkOpPlan input) {
   ObjectRequest object{
       .object = input.request.object,
       .offset = input.request.offset,
@@ -60,7 +58,7 @@ ChunkTransferRequest BuildChunkRequest(const ClientOptions& options, ChunkRpcInp
       .checksum_policy = input.request.checksum_policy,
       .extra_headers = input.request.extra_headers,
   };
-  return ChunkTransferRequest{
+  return ChunkOp{
       .context = MakeRpcContext(options, input.request.timeout),
       .object = std::move(object),
       .operation = input.operation,
@@ -70,26 +68,19 @@ ChunkTransferRequest BuildChunkRequest(const ClientOptions& options, ChunkRpcInp
       .rdma_token = std::move(input.rdma_token),
       .chunk_offset = input.chunk_offset,
       .chunk_size = input.chunk_size,
+      .upload_id = std::move(input.upload_id),
+      .part_number = input.part_number,
   };
 }
 
-TransferSession BuildSession(
-    const fusion_access::gateway::NegotiateTransferSessionResponse& response) {
+TransferSession ImportSession(
+    const us3_turbo_access::gateway::OpenSessionResponse& response) {
   TransferSession session;
   session.meta.request_id = response.request_id();
   session.meta.session_id = response.session_id();
   session.meta.ticket = response.ticket();
   session.meta.expire_at = response.expire_at();
   session.meta.gateway_id = response.gateway_id().empty() ? kDefaultGatewayId : response.gateway_id();
-  session.meta.gateway_endpoint = response.gateway_endpoint();
-  session.meta.channel_id = response.channel_id();
-  session.meta.async_handle = response.async_handle();
-  for (const auto& item : response.chunk_plan()) {
-    session.chunk_plan.push_back({.offset = item.offset(), .size = item.size()});
-  }
-  for (const auto& [key, value] : response.rdma_parameters()) {
-    session.headers[key] = value;
-  }
   return session;
 }
 

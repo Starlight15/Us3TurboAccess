@@ -1,14 +1,12 @@
 #include "client/src/transports/gds/gds_memory_registry.h"
 
-#include <sstream>
-
 #include "client/src/core/common/errors.h"
 
 namespace us3_turbo_access::client {
 namespace {
 
 template <typename Pointer>
-[[nodiscard]] Result<RegisteredBuffer> BuildDescriptor(OperationType operation, Pointer data,
+[[nodiscard]] Result<RegisteredBuffer> BuildDescriptor(OperationType /*operation*/, Pointer data,
                                                        std::size_t size, BufferType type) {
   if (type != BufferType::kCudaDevice) {
     return Result<RegisteredBuffer>::Failure(
@@ -19,13 +17,7 @@ template <typename Pointer>
     return Result<RegisteredBuffer>::Failure(
         MakeInvalidArgument("GDS buffers must be non-null and have a positive size"));
   }
-
-  std::ostringstream descriptor;
-  descriptor << "op=" << ToString(operation) << ";"
-             << "buffer_type=" << ToString(type) << ";"
-             << "address=" << reinterpret_cast<std::uintptr_t>(data) << ";"
-             << "size=" << size;
-  return Result<RegisteredBuffer>::Success(RegisteredBuffer{.memory_descriptor = descriptor.str()});
+  return Result<RegisteredBuffer>::Success(RegisteredBuffer{});
 }
 
 }  // namespace

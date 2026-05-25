@@ -80,4 +80,8 @@ const MetadataClient& ClientCore::metadata_client() const { return impl_->metada
 
 const TransferRouter& ClientCore::transfer_router() const { return impl_->transfer_router; }
 
+GdsDataClient& ClientCore::gds_data_client() { return impl_->gds_data_client; }
+GdsMemoryRegistry& ClientCore::gds_memory_registry() { return impl_->gds_memory_registry; }
+const CuObjectClient& ClientCore::cuobj_client() const { return impl_->cuobject_client; }
+
 }  // namespace us3_turbo_access::client

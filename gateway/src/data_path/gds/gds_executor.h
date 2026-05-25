@@ -15,6 +15,14 @@
 class cuObjServer;
 
 namespace us3_turbo_access::gateway::data_path::gds {
+class PinnedBufferPool;
+}  // namespace us3_turbo_access::gateway::data_path::gds
+
+namespace us3_turbo_access::gateway::core {
+class MetadataService;
+}  // namespace us3_turbo_access::gateway::core
+
+namespace us3_turbo_access::gateway::data_path::gds {
 
 /**
  * @brief GDS / cuObject server-side data-path executor.
@@ -28,6 +36,7 @@ class GdsExecutor final : public IDataPathExecutor {
  public:
   GdsExecutor(std::string public_host, std::string bind_host, int port,
               backend::IBackend& backend,
+              core::MetadataService& metadata,
               std::shared_ptr<spdlog::logger> logger);
   ~GdsExecutor() override;
 
@@ -38,6 +47,15 @@ class GdsExecutor final : public IDataPathExecutor {
   [[nodiscard]] std::string endpoint() const override;
   [[nodiscard]] Result<bool> Start() override;
   void                       Stop() override;
+
+  /**
+   * @brief Path-specific session open hook.
+   *
+   * Validates GDS availability and reserves backend space for PUT sessions
+   * with a known expected_size.
+   */
+  [[nodiscard]] Result<bool>
+    OnSessionOpened(const core::Session& session) override;
 
   [[nodiscard]] int                port() const noexcept { return port_; }
   [[nodiscard]] const std::string& bind_host() const noexcept { return bind_host_; }
@@ -59,6 +77,19 @@ class GdsExecutor final : public IDataPathExecutor {
     PutChunk(const core::Session& session, const std::string& rdma_token,
              std::uint64_t object_offset, std::uint64_t length);
 
+  /**
+   * @brief Server-side RDMA READ into a multipart part.
+   *
+   * Pulls @p length bytes from the client GPU and stages them via
+   * `backend.WritePart(upload_id, part_number, ...)`. Returns the part's
+   * etag on success.
+   */
+  [[nodiscard]] Result<std::string>
+    PutPart(const core::Session& session, const std::string& rdma_token,
+            const std::string& upload_id, std::uint32_t part_number,
+            std::uint64_t object_offset, std::uint64_t length,
+            std::string_view checksum_policy);
+
  private:
   [[nodiscard]] Result<std::shared_ptr<cuObjServer>> GetServer() const;
 
@@ -66,9 +97,11 @@ class GdsExecutor final : public IDataPathExecutor {
   std::string                       bind_host_;
   int                               port_{0};
   backend::IBackend&                backend_;
+  core::MetadataService&            metadata_;
   std::shared_ptr<spdlog::logger>   logger_;
   mutable std::mutex                mu_;
   std::shared_ptr<cuObjServer>      server_;
+  std::shared_ptr<PinnedBufferPool> buffer_pool_;
 };
 
 }  // namespace us3_turbo_access::gateway::data_path::gds

@@ -25,7 +25,7 @@
      - `ControlPlaneClient`
      - `GdsRpcClient`
      - `ObjectRequestBuilder`
-     - `SessionNegotiator`
+     - `SessionOpener`
      - `GdsMemoryRegistry`
      - `CuObjectClient`
      - `RdmaTransport`
@@ -42,7 +42,7 @@
    - 新增明确边界的对象控制面模块，例如：
      - `client/src/api/object_api.h/.cpp`
    - 该层内部复用：
-     - `ObjectRequestBuilder::BuildRpcRequestContext`
+     - `ObjectRequestBuilder::BuildRpcCallMetadata`
      - `ControlPlaneClient::HeadObject`
    - 只承载对象级控制面语义（现在是 Head，后续 Delete/Stat 也可收进来）。
 
@@ -64,7 +64,7 @@
      - `client/src/core/gds/gds_put_flow.cpp`
    - 其中每个 flow 文件各自实现：
      - register buffer
-     - negotiate session
+     - build protocol session
      - execute cuObject transfer
    - RDMA 也按同样结构预留：
      - `client/src/core/rdma/rdma_get_flow.cpp`
@@ -78,7 +78,7 @@
 
 7. 保持现有可复用基础组件，不重新设计伪统一传输层。
    - 继续复用：
-     - `SessionNegotiator`
+     - `SessionOpener`
      - `ObjectRequestBuilder`
      - `ControlPlaneClient`
      - `GdsRpcClient`
@@ -96,8 +96,8 @@
 - `Us3TurboAccess/client/src/core/gds/gds_path_executor.cpp`
 - `Us3TurboAccess/client/src/core/rdma/rdma_path_executor.h`
 - `Us3TurboAccess/client/src/transports/rdma/rdma_transport.h`
-- `Us3TurboAccess/client/src/core/session_negotiator.h`
-- `Us3TurboAccess/client/src/core/session_negotiator.cpp`
+- `Us3TurboAccess/client/src/core/session_opener.h`
+- `Us3TurboAccess/client/src/core/session_opener.cpp`
 - `Us3TurboAccess/client/src/core/object_request_builder.h`
 - `Us3TurboAccess/client/src/core/object_request_builder.cpp`
 - `Us3TurboAccess/client/src/control/control_plane_client.h`
@@ -117,13 +117,13 @@
   - `Us3TurboAccess/client/src/core/transfer_orchestrator.cpp` `TransferOrchestrator::GetObject/PutObject`
   - `Us3TurboAccess/client/src/core/path_executor.h` `PathExecutor`
 - GDS 通路公共能力：
-  - `Us3TurboAccess/client/src/core/session_negotiator.cpp` `SessionNegotiator::NegotiateSession`
+  - `Us3TurboAccess/client/src/core/session_opener.cpp` `SessionOpener::OpenSession`
   - `Us3TurboAccess/client/src/transports/gds/gds_memory_registry.cpp` `GdsMemoryRegistry::Register`
   - `Us3TurboAccess/client/src/transports/gds/cuobject_client.cpp` `CuObjectClient::ExecuteGet/ExecutePut`
   - `Us3TurboAccess/client/src/core/object_request_builder.cpp` `BuildGdsChunkRequest`
 - object control-plane 能力：
   - `Us3TurboAccess/client/src/control/control_plane_client.cpp` `ControlPlaneClient::HeadObject`
-  - `Us3TurboAccess/client/src/core/object_request_builder.cpp` `BuildRpcRequestContext`
+  - `Us3TurboAccess/client/src/core/object_request_builder.cpp` `BuildRpcCallMetadata`
 - RDMA 顶层隔离入口：
   - `Us3TurboAccess/client/src/core/rdma/rdma_path_executor.h` `RdmaPathExecutor`
   - `Us3TurboAccess/client/src/transports/rdma/rdma_transport.h` `RdmaTransport`

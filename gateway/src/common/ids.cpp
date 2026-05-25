@@ -1,11 +1,9 @@
 #include "common/ids.h"
 
-#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <ctime>
 #include <iomanip>
-#include <mutex>
 #include <random>
 #include <sstream>
 #include <string>
@@ -45,26 +43,6 @@ std::string MakeExpireAt(std::chrono::seconds ttl) {
   std::ostringstream out;
   out << std::put_time(&tm_utc, "%Y-%m-%dT%H:%M:%SZ");
   return out.str();
-}
-
-std::vector<ChunkPlanItem> BuildChunkPlan(std::uint64_t offset,
-                                          std::uint64_t total_size,
-                                          std::size_t chunk_size_hint) {
-  std::vector<ChunkPlanItem> plan;
-  if (total_size == 0U) {
-    return plan;
-  }
-  const std::uint64_t chunk = chunk_size_hint == 0U
-                                  ? total_size
-                                  : static_cast<std::uint64_t>(chunk_size_hint);
-  for (std::uint64_t cursor = 0; cursor < total_size; cursor += chunk) {
-    const auto remaining = total_size - cursor;
-    ChunkPlanItem item;
-    item.offset = offset + cursor;
-    item.size = std::min<std::uint64_t>(chunk, remaining);
-    plan.push_back(item);
-  }
-  return plan;
 }
 
 }  // namespace us3_turbo_access::gateway::common

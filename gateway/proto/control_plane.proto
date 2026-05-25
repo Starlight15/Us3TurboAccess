@@ -1,15 +1,10 @@
 syntax = "proto3";
 
-package fusion_access.gateway;
+package us3_turbo_access.gateway;
 
 option cc_generic_services = true;
 
-message TransferChunkPlanItem {
-  uint64 offset = 1;
-  uint64 size = 2;
-}
-
-message NegotiateTransferSessionRequest {
+message OpenSessionRequest {
   string request_id = 1;
   string session_id = 2;
   string bucket = 3;
@@ -17,24 +12,26 @@ message NegotiateTransferSessionRequest {
   string op_type = 5;
   string data_path = 6;
   string buffer_type = 7;
-  string channel_id = 8;
+  // 8 was channel_id        (removed: just echoed, never consumed)
   uint64 offset = 9;
   uint64 expected_size = 10;
-  string buffer_descriptor = 11;
+  // 11 was buffer_descriptor (removed: set by client, never read by server)
   string idempotency_key = 12;
+  reserved 8, 11;
 }
 
-message NegotiateTransferSessionResponse {
+message OpenSessionResponse {
   string request_id = 1;
   string session_id = 2;
   string ticket = 3;
   string gateway_id = 4;
-  string gateway_endpoint = 5;
-  string channel_id = 6;
-  string async_handle = 7;
+  // 5 was gateway_endpoint  (removed: client never reads; data path reuses control channel)
+  // 6 was channel_id        (removed: just echoed from request)
+  // 7 was async_handle      (removed: gateway-generated but client never reads)
   string expire_at = 8;
-  repeated TransferChunkPlanItem chunk_plan = 9;
-  map<string, string> rdma_parameters = 10;
+  // 9  was repeated ChunkPlanItem chunk_plan  (removed: client never enforces)
+  // 10 was map<string,string> rdma_parameters (removed: GDS uses cuObj; native-RDMA not impl)
+  reserved 5, 6, 7, 9, 10;
 }
 
 message HeadObjectRequest {
@@ -49,7 +46,7 @@ message HeadObjectResponse {
   map<string, string> headers = 4;
 }
 
-message ExecuteGdsChunkRequest {
+message GdsChunkRequest {
   string request_id = 1;
   string session_id = 2;
   string transfer_ticket = 3;
@@ -62,9 +59,14 @@ message ExecuteGdsChunkRequest {
   uint64 chunk_size = 10;
   string rdma_token = 11;
   map<string, string> extra_headers = 12;
+  // Multipart-aware fields. When upload_id is non-empty the chunk bytes are
+  // attributed to (upload_id, part_number); the gateway stores them via
+  // backend.WritePart rather than backend.WriteRange.
+  string upload_id = 13;
+  uint32 part_number = 14;
 }
 
-message ExecuteGdsChunkResponse {
+message GdsChunkResponse {
   string selected_gateway = 1;
   string gateway_id = 2;
   string transfer_status = 3;
@@ -73,10 +75,51 @@ message ExecuteGdsChunkResponse {
   string version = 6;
 }
 
+message StartUploadRequest {
+  string bucket = 1;
+  string object_key = 2;
+  uint64 expected_total_size = 3;       // optional hint; 0 == unknown
+  string data_path = 4;
+  string idempotency_key = 5;
+}
+
+message StartUploadResponse {
+  string upload_id = 1;
+  uint64 max_part_size = 2;             // server-side limit (1 GiB today)
+}
+
+message PartEtag {
+  uint32 part_number = 1;
+  string etag = 2;
+}
+
+message CompleteUploadRequest {
+  string upload_id = 1;
+  repeated PartEtag parts = 2;
+}
+
+message CompleteUploadResponse {
+  string etag = 1;
+  string version = 2;
+  uint64 content_length = 3;
+}
+
+message AbortUploadRequest {
+  string upload_id = 1;
+}
+
+message AbortUploadResponse {
+}
+
 service ControlPlaneService {
-  rpc NegotiateTransferSession(NegotiateTransferSessionRequest)
-      returns (NegotiateTransferSessionResponse);
+  rpc OpenSession(OpenSessionRequest)
+      returns (OpenSessionResponse);
   rpc HeadObject(HeadObjectRequest) returns (HeadObjectResponse);
-  rpc ExecuteGdsGet(ExecuteGdsChunkRequest) returns (ExecuteGdsChunkResponse);
-  rpc ExecuteGdsPut(ExecuteGdsChunkRequest) returns (ExecuteGdsChunkResponse);
+  rpc GdsGet(GdsChunkRequest) returns (GdsChunkResponse);
+  rpc GdsPut(GdsChunkRequest) returns (GdsChunkResponse);
+
+  // Multipart upload
+  rpc StartUpload(StartUploadRequest) returns (StartUploadResponse);
+  rpc CompleteUpload(CompleteUploadRequest) returns (CompleteUploadResponse);
+  rpc AbortUpload(AbortUploadRequest) returns (AbortUploadResponse);
 }

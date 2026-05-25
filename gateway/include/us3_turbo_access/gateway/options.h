@@ -15,6 +15,7 @@ namespace us3_turbo_access::gateway {
 enum class BackendKind {
   kMemory,    /**< In-memory KV with capacity ceiling.   */
   kNull,      /**< Discard writes / synthesize empty reads. */
+  kComposite, /**< Split index + data via IIndexStore + IDataStore (current: Null stubs). */
 };
 
 /**
@@ -33,6 +34,7 @@ struct GatewayOptions {
   int         brpc_port{8080};
   int         idle_timeout_sec{-1};
   int         num_threads{4};
+  int         io_worker_threads{32};   /**< Background IO pool size for chunk RPCs. */
 
   // RDMA / GDS
   bool        rdma_enable{false};      /**< Native-RDMA path (M2). */
@@ -44,10 +46,18 @@ struct GatewayOptions {
   // Transfer planning
   std::size_t default_chunk_size{8U * 1024U * 1024U};
   std::chrono::seconds session_ttl{std::chrono::minutes(10)};
+  std::chrono::seconds session_sweep_interval{std::chrono::seconds(30)};
 
   // Backend
   BackendKind backend_kind{BackendKind::kMemory};
   std::size_t backend_capacity{4ULL * 1024ULL * 1024ULL * 1024ULL};
+
+  // Multipart upload
+  std::size_t multipart_max_part_size{1ULL * 1024ULL * 1024ULL * 1024ULL};
+  // S3-style minimum part size (except the last part). 0 disables the check
+  // (useful for tests with tiny parts).
+  std::size_t multipart_min_part_size{5ULL * 1024ULL * 1024ULL};
+  std::chrono::seconds multipart_ttl{std::chrono::minutes(30)};
 
   // Logging
   std::shared_ptr<spdlog::logger> logger;

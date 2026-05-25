@@ -1,5 +1,6 @@
 #include "core/session/session_store.h"
 
+#include <functional>
 #include <utility>
 
 #include "common/ids.h"
@@ -7,37 +8,35 @@
 
 namespace us3_turbo_access::gateway::core {
 
-SessionStore::SessionStore(std::string gateway_id, std::string gateway_endpoint,
-                           std::size_t default_chunk_size,
+SessionStore::SessionStore(std::string gateway_id,
                            std::chrono::seconds session_ttl,
                            std::shared_ptr<spdlog::logger> logger)
     : logger_(std::move(logger)),
       gateway_id_(std::move(gateway_id)),
-      gateway_endpoint_(std::move(gateway_endpoint)),
-      default_chunk_size_(default_chunk_size),
       session_ttl_(session_ttl) {}
 
-namespace {
-
-std::pair<std::string, std::string> SplitHostPort(std::string_view endpoint) {
-  const auto colon = endpoint.rfind(':');
-  if (colon == std::string_view::npos) {
-    return {std::string(endpoint), {}};
-  }
-  return {std::string(endpoint.substr(0, colon)),
-          std::string(endpoint.substr(colon + 1))};
+SessionStore::Shard& SessionStore::ShardFor(std::string_view key) const {
+  const auto h = std::hash<std::string_view>{}(key);
+  return shards_[h % kShardCount];
 }
 
-}  // namespace
-
-Result<std::shared_ptr<Session>> SessionStore::Create(const NegotiateRequest& req) {
-  {
-    std::scoped_lock lock(mu_);
-    if (!req.idempotency_key.empty()) {
-      auto it = by_idempotency_.find(req.idempotency_key);
-      if (it != by_idempotency_.end()) {
-        return Result<std::shared_ptr<Session>>::Success(it->second);
+// 新建 session 并落到三索引，或幂等命中时复用并校验一致。
+Result<std::shared_ptr<Session>> SessionStore::Create(const OpenSessionParams& req) {
+  // 幂等命中：bucket/object/op 必须一致，否则视为 key 误用。
+  if (!req.idempotency_key.empty()) {
+    auto& shard = ShardFor(req.idempotency_key);
+    std::scoped_lock lock(shard.mu);
+    auto it = shard.by_idempotency.find(req.idempotency_key);
+    if (it != shard.by_idempotency.end()) {
+      const auto& existing = *it->second;
+      if (existing.bucket != req.bucket ||
+          existing.object_key != req.object_key ||
+          existing.op != req.op) {
+        return Result<std::shared_ptr<Session>>::Failure(common::MakeError(
+            ErrorCode::kBadRequest,
+            "idempotency_key collides with a different bucket/object/op"));
       }
+      return Result<std::shared_ptr<Session>>::Success(it->second);
     }
   }
 
@@ -48,9 +47,6 @@ Result<std::shared_ptr<Session>> SessionStore::Create(const NegotiateRequest& re
       req.request_id.empty() ? common::MakeRandomId("req-") : req.request_id;
   session->ticket = common::MakeRandomId("ticket-");
   session->gateway_id = gateway_id_;
-  session->gateway_endpoint = gateway_endpoint_;
-  session->channel_id = req.channel_id.empty() ? "channel-0" : req.channel_id;
-  session->async_handle = common::MakeRandomId("async-");
   session->expire_at = common::MakeExpireAt(session_ttl_);
   session->bucket = req.bucket;
   session->object_key = req.object_key;
@@ -59,25 +55,28 @@ Result<std::shared_ptr<Session>> SessionStore::Create(const NegotiateRequest& re
   session->buffer_type = req.buffer_type.empty() ? "host-regular" : req.buffer_type;
   session->offset = req.offset;
   session->expected_size = req.expected_size;
-  session->chunk_plan =
-      common::BuildChunkPlan(session->offset, session->expected_size, default_chunk_size_);
   session->idempotency_key = req.idempotency_key;
-  session->state.store(SessionState::kNegotiated, std::memory_order_release);
+  session->state.store(SessionState::kOpened, std::memory_order_release);
   session->expire_deadline =
       std::chrono::steady_clock::now() + session_ttl_;
 
-  const auto [host, port] = SplitHostPort(gateway_endpoint_);
-  session->rdma_parameters.host = host;
-  session->rdma_parameters.port = port;
-
+  // 三索引落到各自 shard；shared_ptr 兜底引用，sweep 时两阶段清理。
   {
-    std::scoped_lock lock(mu_);
-    by_id_[session->session_id] = session;
-    by_ticket_[session->ticket] = session->session_id;
-    if (!session->idempotency_key.empty()) {
-      by_idempotency_[session->idempotency_key] = session;
-    }
+    auto& shard = ShardFor(session->session_id);
+    std::scoped_lock lock(shard.mu);
+    shard.by_id[session->session_id] = session;
   }
+  {
+    auto& shard = ShardFor(session->ticket);
+    std::scoped_lock lock(shard.mu);
+    shard.by_ticket[session->ticket] = session;
+  }
+  if (!session->idempotency_key.empty()) {
+    auto& shard = ShardFor(session->idempotency_key);
+    std::scoped_lock lock(shard.mu);
+    shard.by_idempotency[session->idempotency_key] = session;
+  }
+
   if (logger_ != nullptr) {
     logger_->info("session.create id={} ticket={} op={} data_path={} size={}",
                   session->session_id, session->ticket,
@@ -90,9 +89,10 @@ Result<std::shared_ptr<Session>> SessionStore::Create(const NegotiateRequest& re
 
 Result<std::shared_ptr<Session>> SessionStore::Find(
     std::string_view session_id) const {
-  std::scoped_lock lock(mu_);
-  auto it = by_id_.find(std::string(session_id));
-  if (it == by_id_.end()) {
+  auto& shard = ShardFor(session_id);
+  std::scoped_lock lock(shard.mu);
+  auto it = shard.by_id.find(std::string(session_id));
+  if (it == shard.by_id.end()) {
     return Result<std::shared_ptr<Session>>::Failure(
         common::MakeError(ErrorCode::kSessionNotFound, "session not found"));
   }
@@ -101,18 +101,14 @@ Result<std::shared_ptr<Session>> SessionStore::Find(
 
 Result<std::shared_ptr<Session>> SessionStore::FindByTicket(
     std::string_view ticket) const {
-  std::scoped_lock lock(mu_);
-  auto it = by_ticket_.find(std::string(ticket));
-  if (it == by_ticket_.end()) {
+  auto& shard = ShardFor(ticket);
+  std::scoped_lock lock(shard.mu);
+  auto it = shard.by_ticket.find(std::string(ticket));
+  if (it == shard.by_ticket.end()) {
     return Result<std::shared_ptr<Session>>::Failure(
         common::MakeError(ErrorCode::kTicketInvalid, "ticket not found"));
   }
-  auto session_it = by_id_.find(it->second);
-  if (session_it == by_id_.end()) {
-    return Result<std::shared_ptr<Session>>::Failure(
-        common::MakeError(ErrorCode::kSessionNotFound, "session not found"));
-  }
-  return Result<std::shared_ptr<Session>>::Success(session_it->second);
+  return Result<std::shared_ptr<Session>>::Success(it->second);
 }
 
 Result<std::shared_ptr<Session>> SessionStore::Claim(std::string_view ticket) {
@@ -121,7 +117,7 @@ Result<std::shared_ptr<Session>> SessionStore::Claim(std::string_view ticket) {
     return lookup;
   }
   auto session = lookup.value();
-  SessionState expected = SessionState::kNegotiated;
+  SessionState expected = SessionState::kOpened;
   if (!session->state.compare_exchange_strong(expected, SessionState::kClaimed,
                                               std::memory_order_acq_rel)) {
     return Result<std::shared_ptr<Session>>::Failure(common::MakeError(
@@ -153,6 +149,20 @@ Result<std::shared_ptr<Session>> SessionStore::MarkActive(
                     ErrorCode::kStaleState);
 }
 
+Result<std::shared_ptr<Session>> SessionStore::BumpActive(
+    std::string_view session_id) {
+  auto lookup = Find(session_id);
+  if (!lookup.success()) {
+    return lookup;
+  }
+  auto session = lookup.value();
+  SessionState current = SessionState::kOpened;
+  // CAS kOpened→kActive; if already past kOpened (kActive/kCompleted/...) no-op.
+  session->state.compare_exchange_strong(current, SessionState::kActive,
+                                          std::memory_order_acq_rel);
+  return lookup;
+}
+
 Result<std::shared_ptr<Session>> SessionStore::MarkCompleted(
     std::string_view session_id) {
   auto lookup = Find(session_id);
@@ -175,31 +185,45 @@ Result<std::shared_ptr<Session>> SessionStore::MarkFailed(
   return lookup;
 }
 
-void SessionStore::UpdateRdmaParameters(std::string_view session_id,
-                                        const RdmaParameters& parameters) {
-  std::scoped_lock lock(mu_);
-  auto it = by_id_.find(std::string(session_id));
-  if (it == by_id_.end()) {
-    return;
-  }
-  it->second->rdma_parameters = parameters;
-}
-
 std::size_t SessionStore::SweepExpired(
     std::chrono::steady_clock::time_point now) {
   std::size_t evicted = 0;
-  std::scoped_lock lock(mu_);
-  for (auto it = by_id_.begin(); it != by_id_.end();) {
-    if (it->second->expire_deadline <= now) {
-      it->second->state.store(SessionState::kExpired, std::memory_order_release);
-      by_ticket_.erase(it->second->ticket);
-      if (!it->second->idempotency_key.empty()) {
-        by_idempotency_.erase(it->second->idempotency_key);
+
+  // 第一步：每个 shard 自己扫一遍 by_id，把过期的拉出来
+  std::vector<std::shared_ptr<Session>> expired;
+  for (auto& shard : shards_) {
+    std::scoped_lock lock(shard.mu);
+    for (auto it = shard.by_id.begin(); it != shard.by_id.end();) {
+      const auto current_state =
+          it->second->state.load(std::memory_order_acquire);
+      const bool ttl_expired = it->second->expire_deadline <= now;
+      const bool terminal = current_state == SessionState::kFailed ||
+                            current_state == SessionState::kCompleted;
+      if (ttl_expired || terminal) {
+        if (ttl_expired && !terminal) {
+          it->second->state.store(SessionState::kExpired,
+                                  std::memory_order_release);
+        }
+        expired.push_back(it->second);
+        it = shard.by_id.erase(it);
+        ++evicted;
+      } else {
+        ++it;
       }
-      it = by_id_.erase(it);
-      ++evicted;
-    } else {
-      ++it;
+    }
+  }
+
+  // 第二步：把 ticket / idempotency 索引也清掉（可能落在不同 shard）
+  for (const auto& session : expired) {
+    auto& tshard = ShardFor(session->ticket);
+    {
+      std::scoped_lock lock(tshard.mu);
+      tshard.by_ticket.erase(session->ticket);
+    }
+    if (!session->idempotency_key.empty()) {
+      auto& ishard = ShardFor(session->idempotency_key);
+      std::scoped_lock lock(ishard.mu);
+      ishard.by_idempotency.erase(session->idempotency_key);
     }
   }
   return evicted;

@@ -1,6 +1,6 @@
 syntax = "proto2";
 
-package fusion_access.gateway;
+package us3_turbo_access.gateway;
 
 option cc_generic_services = true;
 

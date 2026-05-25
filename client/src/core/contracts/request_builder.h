@@ -10,17 +10,16 @@
 
 namespace us3_turbo_access::client {
 
-// 装配 OpenSessionRequest 所需的输入参数集合。
-struct OpenSessionInput {
+// 装配 SessionOpening 所需的输入参数集合。
+struct SessionPlan {
   OperationType operation;
   RequestOptions request;
   BufferType buffer_type;
   DataPath path;
-  std::string memory_descriptor;
 };
 
-// 装配 ChunkTransferRequest 所需的输入参数集合。
-struct ChunkRpcInput {
+// 装配 ChunkOp 所需的输入参数集合。
+struct ChunkOpPlan {
   OperationType operation;
   RequestOptions request;
   BufferType buffer_type;
@@ -31,13 +30,15 @@ struct ChunkRpcInput {
   std::string rdma_token;
   std::uint64_t chunk_offset{0};
   std::size_t chunk_size{0};
+  std::string upload_id;
+  std::uint32_t part_number{0};
 };
 
-[[nodiscard]] OpenSessionRequest BuildOpenSessionRequest(const ClientOptions& options,
-                                                          const OpenSessionInput& input);
-[[nodiscard]] ChunkTransferRequest BuildChunkRequest(const ClientOptions& options,
-                                                     ChunkRpcInput input);
-[[nodiscard]] TransferSession BuildSession(
-    const fusion_access::gateway::NegotiateTransferSessionResponse& response);
+[[nodiscard]] SessionOpening MakeSessionHandshake(const ClientOptions& options,
+                                                          const SessionPlan& input);
+[[nodiscard]] ChunkOp MakeChunkOp(const ClientOptions& options,
+                                                     ChunkOpPlan input);
+[[nodiscard]] TransferSession ImportSession(
+    const us3_turbo_access::gateway::OpenSessionResponse& response);
 
 }  // namespace us3_turbo_access::client

@@ -9,7 +9,7 @@ namespace us3_turbo_access::client {
 /**
  * @brief Header / auth / timeout context attached to every RPC call.
  */
-struct RpcRequestContext {
+struct RpcCallMetadata {
   std::string client_id;
   std::string bearer_token;
   std::unordered_map<std::string, std::string> default_headers;

@@ -7,9 +7,13 @@
 
 namespace us3_turbo_access::client {
 
-struct RegisteredBuffer {
-  std::string memory_descriptor;
-};
+/**
+ * @brief Result of a successful Register() call. Kept as a struct so the
+ *        existing code style (.success() / .value().xxx access) doesn't
+ *        need to change; no public fields are needed now that gateway no
+ *        longer consumes the memory descriptor.
+ */
+struct RegisteredBuffer {};
 
 /**
  * @brief GDS GPU buffer 注册器。

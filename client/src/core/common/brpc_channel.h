@@ -13,7 +13,7 @@
 namespace us3_turbo_access::client {
 
 [[nodiscard]] std::string TrimTrailingSlash(std::string endpoint);
-void ApplyRequestHeaders(brpc::Controller& controller, const RpcRequestContext& context);
+void ApplyRequestHeaders(brpc::Controller& controller, const RpcCallMetadata& context);
 [[nodiscard]] Result<bool> CheckRpcFailure(const brpc::Controller& controller,
                                            const std::string& message,
                                            DataPath path,

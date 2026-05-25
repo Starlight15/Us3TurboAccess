@@ -24,6 +24,8 @@ class ChunkDispatcher {
   ChunkDispatcher(const ClientOptions& options, const GdsDataClient& data_client,
                   const TransferSession& session, const RequestOptions& request, OperationType op);
 
+  void SetMultipart(std::string upload_id, std::uint32_t part_number);
+
   struct Outcome {
     std::string gateway_id;
     std::string transfer_status;
@@ -52,6 +54,9 @@ class ChunkDispatcher {
   std::string request_id_;
   std::string session_id_;
   std::string ticket_;
+  std::string upload_id_;
+  std::uint32_t part_number_{0};
+  std::uint64_t part_base_offset_{0};
 };
 
 }  // namespace us3_turbo_access::client

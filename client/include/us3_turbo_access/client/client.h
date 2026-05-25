@@ -1,6 +1,9 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
+#include <string>
+#include <vector>
 
 #include "us3_turbo_access/client/options.h"
 #include "us3_turbo_access/client/result.h"
@@ -8,18 +11,70 @@
 namespace us3_turbo_access::client {
 
 class ClientCore;
+class Client;
+
+struct StartUploadResult {
+  std::string upload_id;
+  std::size_t max_part_size{0};
+};
+
+struct CompleteUploadResult {
+  std::string etag;
+  std::string version;
+  std::size_t content_length{0};
+};
 
 /**
- * @brief Public entry point of the US3 turbo-access client SDK.
+ * @brief Multipart upload handle returned by Client::StartUpload.
  *
- * Create one client per endpoint/configuration pair, call Initialize() before use,
- * and call Shutdown() when the client is no longer needed.
+ * Thread-compat: each handle is owned by one logical uploader; multiple parts
+ * can be uploaded sequentially. UploadPart is synchronous and returns the
+ * (part_number, etag) needed at Complete time.
  */
+class MultipartUpload {
+ public:
+  ~MultipartUpload();
+  MultipartUpload(const MultipartUpload&) = delete;
+  MultipartUpload& operator=(const MultipartUpload&) = delete;
+  MultipartUpload(MultipartUpload&&) noexcept;
+  MultipartUpload& operator=(MultipartUpload&&) noexcept;
+
+  [[nodiscard]] const std::string& upload_id() const noexcept;
+  [[nodiscard]] std::size_t max_part_size() const noexcept;
+
+  /** @brief Sets the per-chunk checksum policy ("none" | "md5"). */
+  void set_checksum_policy(std::string policy);
+
+  [[nodiscard]] Result<TransferOutcome>
+    UploadPart(std::uint32_t part_number, std::uint64_t object_offset,
+               ConstBufferView buffer);
+
+  struct PartSpec {
+    std::uint32_t   part_number{0};
+    std::uint64_t   object_offset{0};
+    ConstBufferView buffer{};
+  };
+
+  /**
+   * @brief Uploads multiple parts in parallel. On the first failure the
+   *        remaining in-flight uploads still drain; the first error is
+   *        returned. Each part must reference a distinct device buffer.
+   */
+  [[nodiscard]] Result<std::vector<TransferOutcome>>
+    UploadParts(const std::vector<PartSpec>& parts, std::size_t concurrency);
+
+  [[nodiscard]] Result<CompleteUploadResult> Complete();
+  [[nodiscard]] Result<bool> Abort();
+
+ private:
+  friend class Client;
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+  explicit MultipartUpload(std::unique_ptr<Impl> impl);
+};
+
 class Client {
  public:
-  /**
-   * @brief Creates a client with the provided options.
-   */
   explicit Client(ClientOptions options);
   ~Client();
 
@@ -28,42 +83,20 @@ class Client {
   Client(Client&&) = delete;
   Client& operator=(Client&&) = delete;
 
-  /**
-   * @brief Initializes transport and control-plane dependencies.
-   */
   [[nodiscard]] Result<bool> Initialize();
-
-  /**
-   * @brief Releases resources owned by the client core.
-   */
   void Shutdown();
-
-  /**
-   * @brief Returns whether Initialize() has completed successfully.
-   */
   [[nodiscard]] bool initialized() const;
-
-  /**
-   * @brief Returns the capabilities detected for the current environment.
-   */
   [[nodiscard]] const PlatformCapabilities& capabilities() const;
 
-  /**
-   * @brief Fetches metadata for an object.
-   */
   [[nodiscard]] Result<ObjectMetadata> HeadObject(const ObjectId& object) const;
-
-  /**
-   * @brief Reads object data into the provided buffer.
-   */
   [[nodiscard]] Result<TransferOutcome> GetObject(const RequestOptions& request,
                                                   MutableBufferView buffer) const;
-
-  /**
-   * @brief Writes object data from the provided buffer.
-   */
   [[nodiscard]] Result<TransferOutcome> PutObject(const RequestOptions& request,
                                                   ConstBufferView buffer) const;
+
+  [[nodiscard]] Result<MultipartUpload>
+    StartUpload(const ObjectId& object, std::size_t expected_total_size = 0,
+                const std::string& idempotency_key = {});
 
  private:
   std::unique_ptr<ClientCore> core_;

@@ -7,12 +7,21 @@
 
 #include "api/control_plane_service.h"
 #include "api/http_frontend.h"
-#include "backend/memory_backend.h"
+#include "backend/composite_backend.h"
+#include "backend/memory_data_store.h"
+#include "backend/memory_index_store.h"
 #include "backend/null_backend.h"
-#include "core/negotiator/negotiator.h"
+#include "backend/null_data_store.h"
+#include "backend/null_index_store.h"
+#include "core/metadata/metadata_service.h"
+#include "core/multipart/multipart_coordinator.h"
+#include "core/multipart/multipart_store.h"
+#include "core/session_opener/session_opener.h"
 #include "core/session/session_store.h"
-#include "core/transfer/transfer_engine.h"
+#include "core/session/session_sweeper.h"
 #include "data_path/gds/gds_executor.h"
+#include "runtime/io_worker_pool.h"
+#include "data_path/http/http_executor.h"
 #include "common/error.h"
 #include "common/log.h"
 
@@ -23,15 +32,21 @@ namespace {
 std::unique_ptr<backend::IBackend> MakeBackend(const GatewayOptions& opts) {
   switch (opts.backend_kind) {
     case BackendKind::kMemory:
-      return std::make_unique<backend::MemoryBackend>(opts.backend_capacity);
+      // 内存 backend 现在走 composite：MemoryIndex + MemoryData。
+      return std::make_unique<backend::CompositeBackend>(
+          std::make_unique<backend::MemoryIndexStore>(),
+          std::make_unique<backend::MemoryDataStore>(opts.backend_capacity));
     case BackendKind::kNull:
       return std::make_unique<backend::NullBackend>();
+    case BackendKind::kComposite:
+      // 协议链路验证用：Null + Null，wire 通但字节是假的。
+      return std::make_unique<backend::CompositeBackend>(
+          std::make_unique<backend::NullIndexStore>(),
+          std::make_unique<backend::NullDataStore>());
   }
-  return std::make_unique<backend::MemoryBackend>(opts.backend_capacity);
-}
-
-std::string MakeRdmaEndpoint(const GatewayOptions& opts) {
-  return opts.public_host + ":" + std::to_string(opts.rdma_port);
+  return std::make_unique<backend::CompositeBackend>(
+      std::make_unique<backend::MemoryIndexStore>(),
+      std::make_unique<backend::MemoryDataStore>(opts.backend_capacity));
 }
 
 }  // namespace
@@ -44,6 +59,7 @@ GatewayRuntime::~GatewayRuntime() { Shutdown(); }
 bool GatewayRuntime::initialized() const noexcept { return started_; }
 const GatewayOptions& GatewayRuntime::options() const noexcept { return options_; }
 
+// 按依赖顺序装配；任一步失败 fail-fast，未起资源由析构兜底。
 Result<bool> GatewayRuntime::Initialize() {
   if (started_) {
     return Result<bool>::Success(true);
@@ -51,6 +67,7 @@ Result<bool> GatewayRuntime::Initialize() {
   logger_ = common::EnsureLogger(options_.logger);
   options_.logger = logger_;
 
+  // M1 阶段不支持 native-RDMA。
   if (options_.rdma_enable) {
     return Result<bool>::Failure(common::MakeError(
         ErrorCode::kRdmaUnavailable,
@@ -61,32 +78,43 @@ Result<bool> GatewayRuntime::Initialize() {
     options_.gds_rdma_port = options_.rdma_port + 1;
   }
 
+  // backend 是所有上层模块的依赖根。
   backend_ = MakeBackend(options_);
   sessions_ = std::make_unique<core::SessionStore>(
-      options_.gateway_id, MakeRdmaEndpoint(options_),
-      options_.default_chunk_size, options_.session_ttl, logger_);
-  transfers_ = std::make_unique<core::TransferEngine>(*backend_, logger_);
+      options_.gateway_id, options_.session_ttl, logger_);
+  metadata_ = std::make_unique<core::MetadataService>(*backend_);
+  multipart_store_ = std::make_unique<core::multipart::MultipartStore>(
+      options_.multipart_ttl);
+  multipart_coordinator_ = std::make_unique<core::multipart::MultipartCoordinator>(
+      *backend_, *multipart_store_, options_.multipart_max_part_size,
+      options_.multipart_min_part_size, logger_);
+  http_executor_ = std::make_unique<data_path::http::HttpExecutor>(*backend_, logger_);
+  io_pool_ = std::make_unique<runtime::IoWorkerPool>(
+      static_cast<std::size_t>(std::max(1, options_.io_worker_threads)));
 
+  // 必须先于 brpc.Start，避免 client OpenSession 时 GDS 未就绪。
   if (options_.gds_enable) {
     const std::string gds_bind =
         options_.bind_host == "0.0.0.0" ? options_.public_host : options_.bind_host;
     gds_executor_ = std::make_unique<data_path::gds::GdsExecutor>(
         options_.public_host, gds_bind, options_.gds_rdma_port, *backend_,
-        logger_);
+        *metadata_, logger_);
     auto started = gds_executor_->Start();
     if (!started.success()) {
       return Result<bool>::Failure(started.error());
     }
   }
 
-  negotiator_ = std::make_unique<core::Negotiator>(
-      options_.public_host, options_.gds_rdma_port, *sessions_, *transfers_,
-      gds_executor_.get(), logger_);
+  // SessionOpener 仅协调 SessionStore 与各 executor，不直接持 backend。
+  session_opener_ = std::make_unique<core::SessionOpener>(
+      *sessions_, http_executor_.get(), gds_executor_.get(),
+      /*rdma_executor=*/nullptr, logger_);
 
   control_plane_ = std::make_unique<api::ControlPlaneService>(
-      *sessions_, *transfers_, *negotiator_, gds_executor_.get(), logger_);
+      *sessions_, *metadata_, *session_opener_, gds_executor_.get(),
+      *multipart_coordinator_, *io_pool_, logger_);
   http_frontend_ = std::make_unique<api::HttpFrontend>(
-      options_.gateway_id, *sessions_, *transfers_, logger_);
+      options_.gateway_id, *metadata_, *http_executor_, logger_);
 
   brpc::ServerOptions server_options;
   server_options.idle_timeout_sec = options_.idle_timeout_sec;
@@ -106,9 +134,16 @@ Result<bool> GatewayRuntime::Initialize() {
         ErrorCode::kInternal,
         "failed to start brpc server on " + bind_endpoint));
   }
-  // brpc takes ownership of http_master_service once the server is started;
-  // release the unique_ptr so we don't double-free during Shutdown.
+  // brpc 接管 http_master_service 所有权，release 防止双 free。
   http_frontend_.release();
+
+  // 所有依赖就绪后再启动 sweeper。
+  session_sweeper_ = std::make_unique<core::SessionSweeper>(
+      *sessions_, options_.session_sweep_interval, logger_);
+  session_sweeper_->SetMultipart(multipart_store_.get(),
+                                  multipart_coordinator_.get());
+  session_sweeper_->Start();
+
   started_ = true;
   logger_->info(
       "gateway ready id={} backend={} brpc_endpoint={} public_host={}",
@@ -126,18 +161,29 @@ void GatewayRuntime::Run() {
 
 void GatewayRuntime::Shutdown() {
   if (started_) {
+    if (session_sweeper_ != nullptr) {
+      session_sweeper_->Stop();
+    }
     server_.Stop(0);
     server_.Join();
+    if (io_pool_ != nullptr) {
+      io_pool_->Stop();
+    }
     started_ = false;
   }
+  session_sweeper_.reset();
   control_plane_.reset();
   http_frontend_.reset();  // typically already released to brpc; safe no-op.
-  negotiator_.reset();
+  session_opener_.reset();
   if (gds_executor_ != nullptr) {
     gds_executor_->Stop();
   }
   gds_executor_.reset();
-  transfers_.reset();
+  io_pool_.reset();
+  http_executor_.reset();
+  multipart_coordinator_.reset();
+  multipart_store_.reset();
+  metadata_.reset();
   sessions_.reset();
   backend_.reset();
 }

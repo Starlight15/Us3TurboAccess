@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <span>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -11,12 +12,13 @@
 #include <brpc/http_status_code.h>
 #include <butil/endpoint.h>
 #include <butil/iobuf.h>
+#include <bvar/variable.h>
 #include <nlohmann/json.hpp>
 #include <spdlog/logger.h>
 
 #include "common/range.h"
-#include "core/session/session_store.h"
-#include "core/transfer/transfer_engine.h"
+#include "core/metadata/metadata_service.h"
+#include "data_path/http/http_executor.h"
 #include "common/error.h"
 
 namespace us3_turbo_access::gateway::api {
@@ -79,17 +81,18 @@ void WriteError(brpc::Controller* cntl, std::string_view gateway_id,
 
 }  // namespace
 
-HttpFrontend::HttpFrontend(std::string gateway_id, core::SessionStore& sessions,
-                           core::TransferEngine& transfers,
+HttpFrontend::HttpFrontend(std::string gateway_id,
+                           core::MetadataService& metadata,
+                           data_path::http::HttpExecutor& http,
                            std::shared_ptr<spdlog::logger> logger)
     : gateway_id_(std::move(gateway_id)),
-      sessions_(sessions),
-      transfers_(transfers),
+      metadata_(metadata),
+      http_(http),
       logger_(std::move(logger)) {}
 
 void HttpFrontend::default_method(google::protobuf::RpcController* cntl_base,
-                                   const ::fusion_access::gateway::GatewayHttpRequest*,
-                                   ::fusion_access::gateway::GatewayHttpResponse*,
+                                   const ::us3_turbo_access::gateway::GatewayHttpRequest*,
+                                   ::us3_turbo_access::gateway::GatewayHttpResponse*,
                                    google::protobuf::Closure* done) {
   brpc::ClosureGuard done_guard(done);
   auto* cntl = static_cast<brpc::Controller*>(cntl_base);
@@ -104,6 +107,11 @@ void HttpFrontend::default_method(google::protobuf::RpcController* cntl_base,
   if (method == brpc::HTTP_METHOD_GET &&
       (path == "/healthz" || path == "/v1/healthz")) {
     HandleHealth(cntl);
+    return;
+  }
+  if (method == brpc::HTTP_METHOD_GET &&
+      (path == "/vars" || path.starts_with("/vars/"))) {
+    HandleVars(cntl, std::string(path));
     return;
   }
 
@@ -140,9 +148,34 @@ void HttpFrontend::HandleHealth(brpc::Controller* cntl) {
                                   {"gateway_id", gateway_id_}});
 }
 
+void HttpFrontend::HandleVars(brpc::Controller* cntl, const std::string& path) {
+  std::string filter;
+  if (path.size() > 6 && path[5] == '/') {
+    filter = path.substr(6);  // strip "/vars/"
+  }
+
+  std::vector<std::string> names;
+  bvar::Variable::list_exposed(&names);
+  std::ostringstream body;
+  for (const auto& name : names) {
+    if (!filter.empty() && name.find(filter) == std::string::npos) {
+      continue;
+    }
+    std::ostringstream value;
+    if (bvar::Variable::describe_exposed(name, value) != 0) {
+      continue;
+    }
+    body << name << " : " << value.str() << "\n";
+  }
+  cntl->http_response().set_status_code(brpc::HTTP_STATUS_OK);
+  cntl->http_response().set_content_type("text/plain");
+  SetCommonHeaders(cntl, gateway_id_, "ok");
+  cntl->response_attachment().append(body.str());
+}
+
 void HttpFrontend::HandleHead(brpc::Controller* cntl, const std::string& bucket,
                               const std::string& key) {
-  auto head = transfers_.Head(bucket, key);
+  auto head = metadata_.Head(bucket, key);
   if (!head.success()) {
     WriteError(cntl, gateway_id_, head.error());
     return;
@@ -157,7 +190,7 @@ void HttpFrontend::HandleHead(brpc::Controller* cntl, const std::string& bucket,
 
 void HttpFrontend::HandleGet(brpc::Controller* cntl, const std::string& bucket,
                              const std::string& key) {
-  auto head = transfers_.Head(bucket, key);
+  auto head = metadata_.Head(bucket, key);
   if (!head.success()) {
     WriteError(cntl, gateway_id_, head.error());
     return;
@@ -171,8 +204,8 @@ void HttpFrontend::HandleGet(brpc::Controller* cntl, const std::string& bucket,
                                 "range not satisfiable"));
     return;
   }
-  core::HttpResponseSink sink{cntl};
-  auto report = transfers_.HttpGet(bucket, key, range.offset, range.length, sink);
+  data_path::http::HttpResponseSink sink{cntl};
+  auto report = http_.Get(bucket, key, range.offset, range.length, sink);
   if (!report.success()) {
     WriteError(cntl, gateway_id_, report.error());
     return;
@@ -199,7 +232,7 @@ void HttpFrontend::HandlePut(brpc::Controller* cntl, const std::string& bucket,
   const auto payload = cntl->request_attachment().to_string();
   const std::span<const std::byte> body(
       reinterpret_cast<const std::byte*>(payload.data()), payload.size());
-  auto report = transfers_.HttpPut(bucket, key, body);
+  auto report = http_.Put(bucket, key, body);
   if (!report.success()) {
     WriteError(cntl, gateway_id_, report.error());
     return;
