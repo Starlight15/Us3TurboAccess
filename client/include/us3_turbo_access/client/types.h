@@ -24,8 +24,10 @@ using ErrorCode = ::us3_turbo_access::common::ErrorCode;
 /**
  * @brief Data transfer paths supported by the client.
  *
- * kHttpTcp 走标准 HTTP/1.1（与 server 端 http_master_service 对接），buffer
- * 类型只接 kHostRegular；GDS / RDMA 各自独立通路。
+ * kHttpTcp talks standard HTTP/1.1 to the gateway's http_master_service and
+ * only accepts BufferType::kHostRegular. kGdsCuObject and kNativeRdma are
+ * independent transports with their own buffer-type requirements (cuda
+ * device memory for GDS, host-pinned for RDMA).
  */
 enum class DataPath {
   kGdsCuObject,
@@ -119,18 +121,30 @@ struct ObjectMetadata {
  * @brief Transfer result returned by successful upload and download operations.
  */
 struct TransferOutcome {
-  DataPath selected_path{DataPath::kGdsCuObject}; /**< Data path used for the transfer. */
-  std::size_t bytes_transferred{0};               /**< Total bytes transferred. */
-  std::string request_id;                         /**< Service request identifier. */
-  std::string session_id;                         /**< Transfer session identifier. */
+  /** Data path actually used for the transfer (may differ from request). */
+  DataPath selected_path{DataPath::kGdsCuObject};
+  /** Total bytes transferred. */
+  std::size_t bytes_transferred{0};
+  /** Service-side request identifier, useful for log correlation. */
+  std::string request_id;
+  /** Transfer session identifier (control plane). */
+  std::string session_id;
+  /** Server-reported terminal status for this transfer (e.g. "completed"). */
   std::string transfer_status;
+  /** Identifier of the gateway that handled the transfer. */
   std::string gateway_id;
+  /** Path-specific reply string (RDMA path echoes acknowledgement data here). */
   std::string rdma_reply;
+  /** ETag assigned by the backend on PUT/UploadPart, empty on GET. */
   std::string etag;
+  /** Object version assigned by the backend, when versioning is enabled. */
   std::string version;
-  /** HTTP 通路 PUT/UploadPart 成功后，从响应头 x-amz-checksum-crc32c 解出来的
-   *  server 端实算 CRC32C。client 收到后可与自己上传时算的对比做端到端校验。
-   *  其它通路（GDS/RDMA）暂不填。 */
+  /**
+   * Server-computed CRC32C parsed from the response header
+   * x-amz-checksum-crc32c. Populated by the HTTP path on PUT/UploadPart
+   * for end-to-end validation against the client-side CRC. Other paths
+   * (GDS/RDMA) leave this empty.
+   */
   std::optional<std::uint32_t> server_crc32c;
 };
 
@@ -143,8 +157,11 @@ struct PlatformCapabilities {
   bool cuobject_available{false};      /**< GDS/cuObject prerequisites are available locally. */
 };
 
+/** @brief Returns a stable string identifier for the data path. */
 [[nodiscard]] std::string_view ToString(DataPath path);
+/** @brief Returns a stable string identifier for the buffer type. */
 [[nodiscard]] std::string_view ToString(BufferType type);
+/** @brief Returns a stable string identifier for the operation type. */
 [[nodiscard]] std::string_view ToString(OperationType operation);
 
 }  // namespace us3_turbo_access::client

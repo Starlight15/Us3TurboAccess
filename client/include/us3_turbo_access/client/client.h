@@ -14,23 +14,44 @@ namespace us3_turbo_access::client {
 class ClientCore;
 class Client;
 
+/**
+ * @brief Server-issued state required to upload parts of a multipart object.
+ *
+ * Returned by Client::StartUpload. The caller must echo upload_id back on
+ * every UploadPart and on the matching Complete or Abort call.
+ */
 struct StartUploadResult {
+  /** Opaque upload identifier issued by the gateway. */
   std::string upload_id;
+  /** Maximum bytes accepted per part on this upload (gateway-enforced). */
   std::size_t max_part_size{0};
 };
 
+/**
+ * @brief Final manifest returned after a successful multipart Complete.
+ */
 struct CompleteUploadResult {
+  /** Canonical ETag of the assembled object. */
   std::string etag;
+  /** Object version assigned by the backend, when versioning is enabled. */
   std::string version;
+  /** Total assembled object size in bytes. */
   std::size_t content_length{0};
 };
 
 /**
- * @brief Multipart upload handle returned by Client::StartUpload.
+ * @brief Handle representing an in-progress multipart upload.
  *
- * Thread-compat: each handle is owned by one logical uploader; multiple parts
- * can be uploaded sequentially. UploadPart is synchronous and returns the
- * (part_number, etag) needed at Complete time.
+ * Returned by Client::StartUpload. The handle owns the server-side upload
+ * state until Complete() or Abort() is invoked, or until the handle is
+ * destroyed (in which case the destructor issues a best-effort Abort).
+ *
+ * Thread-compat: a handle is owned by a single logical uploader. Parts can
+ * be submitted serially via UploadPart, or in parallel through UploadParts.
+ *
+ * Lifetime: callers must call either Complete() or Abort() exactly once.
+ * Dropping the handle without doing so triggers a best-effort Abort from
+ * the destructor but does not surface failures.
  */
 class MultipartUpload {
  public:
@@ -40,31 +61,77 @@ class MultipartUpload {
   MultipartUpload(MultipartUpload&&) noexcept;
   MultipartUpload& operator=(MultipartUpload&&) noexcept;
 
+  /** @brief Returns the gateway-issued upload identifier. */
   [[nodiscard]] const std::string& upload_id() const noexcept;
+
+  /** @brief Returns the gateway-enforced upper bound on per-part size. */
   [[nodiscard]] std::size_t max_part_size() const noexcept;
 
-  /** @brief Sets the per-chunk checksum policy ("none" | "md5"). */
+  /**
+   * @brief Sets the per-chunk checksum policy applied to subsequent parts.
+   *
+   * @param policy "none" disables checksums; "md5" computes an MD5 digest
+   *               per chunk and asks the gateway to verify it.
+   */
   void set_checksum_policy(std::string policy);
 
+  /**
+   * @brief Uploads a single part of the multipart object.
+   *
+   * @param part_number   1-based part index; must be unique within the upload.
+   * @param object_offset Byte offset of this part within the final object.
+   * @param buffer        Source buffer; must remain valid until this call
+   *                      returns.
+   * @return Transfer outcome including the part ETag required at Complete().
+   */
   [[nodiscard]] Result<TransferOutcome>
     UploadPart(std::uint32_t part_number, std::uint64_t object_offset,
                ConstBufferView buffer);
 
+  /**
+   * @brief Descriptor for a single part to be uploaded by UploadParts.
+   *
+   * Each PartSpec must reference a distinct device buffer because the
+   * GDS/RDMA backends register memory per outstanding part.
+   */
   struct PartSpec {
+    /** 1-based part index. */
     std::uint32_t   part_number{0};
+    /** Byte offset of this part within the assembled object. */
     std::uint64_t   object_offset{0};
+    /** Source buffer for this part. */
     ConstBufferView buffer{};
   };
 
   /**
-   * @brief Uploads multiple parts in parallel. On the first failure the
-   *        remaining in-flight uploads still drain; the first error is
-   *        returned. Each part must reference a distinct device buffer.
+   * @brief Uploads multiple parts in parallel.
+   *
+   * Launches up to @p concurrency parallel uploads. On the first failure the
+   * remaining in-flight uploads still drain so resources are released; the
+   * first error encountered is returned.
+   *
+   * @param parts       Parts to upload; each must reference a distinct buffer.
+   * @param concurrency Number of parts uploaded in parallel.
+   * @return Per-part TransferOutcome on success, or the first error on
+   *         failure.
    */
   [[nodiscard]] Result<std::vector<TransferOutcome>>
     UploadParts(const std::vector<PartSpec>& parts, std::size_t concurrency);
 
+  /**
+   * @brief Finalises the upload on the gateway and assembles the object.
+   *
+   * Must be called after all parts have been uploaded. Idempotent on the
+   * gateway side when the same upload_id is presented.
+   */
   [[nodiscard]] Result<CompleteUploadResult> Complete();
+
+  /**
+   * @brief Aborts the upload and releases any gateway-side state.
+   *
+   * @return Result::Success(true) when the abort was acknowledged, even if
+   *         the upload had already been completed or aborted previously.
+   */
   [[nodiscard]] Result<bool> Abort();
 
  private:
@@ -74,8 +141,21 @@ class MultipartUpload {
   explicit MultipartUpload(std::unique_ptr<Impl> impl);
 };
 
+/**
+ * @brief Top-level client SDK entry point.
+ *
+ * One Client per process is typical. The instance owns the configured
+ * transport (HTTP / RDMA / GDS) and the executor backing the *Async
+ * methods. Public methods are thread-safe unless documented otherwise.
+ */
 class Client {
  public:
+  /**
+   * @brief Constructs a client with the provided configuration.
+   *
+   * The constructor does not perform network I/O. Call Initialize() to
+   * complete startup before invoking any transfer method.
+   */
   explicit Client(ClientOptions options);
   ~Client();
 
@@ -84,51 +164,124 @@ class Client {
   Client(Client&&) = delete;
   Client& operator=(Client&&) = delete;
 
+  /**
+   * @brief Initialises the client (resolves endpoints, opens pools).
+   *
+   * Idempotent; subsequent calls return Success(true) without side effects.
+   * Must complete successfully before any other method is invoked.
+   */
   [[nodiscard]] Result<bool> Initialize();
+
+  /**
+   * @brief Releases all client resources.
+   *
+   * Safe to call multiple times. After Shutdown() the client cannot be
+   * re-initialised; create a new Client instance instead.
+   */
   void Shutdown();
+
+  /** @brief Returns true after a successful Initialize() call. */
   [[nodiscard]] bool initialized() const;
+
+  /** @brief Returns runtime capabilities detected during Initialize(). */
   [[nodiscard]] const PlatformCapabilities& capabilities() const;
 
+  /**
+   * @brief Issues a HEAD request for the object.
+   *
+   * @return Object metadata including content length, etag, and version.
+   */
   [[nodiscard]] Result<ObjectMetadata> HeadObject(const ObjectId& object) const;
+
+  /**
+   * @brief Downloads the object (or a range of it) into the caller's buffer.
+   *
+   * @param request RequestOptions specifying object id, offset, length and
+   *                progress callback.
+   * @param buffer  Destination buffer; must be at least request.length bytes.
+   */
   [[nodiscard]] Result<TransferOutcome> GetObject(const RequestOptions& request,
                                                   MutableBufferView buffer) const;
+
+  /**
+   * @brief Uploads the contents of @p buffer as the named object.
+   *
+   * @param request RequestOptions identifying the destination object.
+   * @param buffer  Source buffer; must remain valid until this call returns.
+   */
   [[nodiscard]] Result<TransferOutcome> PutObject(const RequestOptions& request,
                                                   ConstBufferView buffer) const;
 
-  /*
-   * 异步版本：把同步实现 Submit 到客户端共享线程池，立即返回 future。
-   * 调用方必须保证 buffer 在 future 完成前保持有效（视图传值，但底层指针仍是用户的）。
-   * 阶段 A 仅是 sync→future 封装，QP 资源仍按调用现场建/拆；C5 切到 CQ 完成
-   * 线程后，本组接口保持不变。
+  /**
+   * @brief Asynchronous variant of HeadObject.
+   *
+   * Submits the work to the shared executor and returns immediately. The
+   * caller must keep the returned future alive until it is ready.
    */
   [[nodiscard]] std::future<Result<ObjectMetadata>>
     HeadObjectAsync(const ObjectId& object) const;
+
+  /**
+   * @brief Asynchronous variant of GetObject.
+   *
+   * @note The caller must keep @p buffer valid until the returned future
+   *       completes; only the view is copied, the underlying memory is not.
+   */
   [[nodiscard]] std::future<Result<TransferOutcome>>
     GetObjectAsync(const RequestOptions& request, MutableBufferView buffer) const;
+
+  /**
+   * @brief Asynchronous variant of PutObject.
+   *
+   * @note The caller must keep @p buffer valid until the returned future
+   *       completes; only the view is copied, the underlying memory is not.
+   */
   [[nodiscard]] std::future<Result<TransferOutcome>>
     PutObjectAsync(const RequestOptions& request, ConstBufferView buffer) const;
 
+  /**
+   * @brief Initiates a multipart upload.
+   *
+   * @param object              Destination object.
+   * @param expected_total_size Optional hint for the gateway; pass 0 if
+   *                            unknown. The gateway may use it to allocate
+   *                            backend storage upfront.
+   * @param idempotency_key     Caller-supplied token; identical keys for the
+   *                            same object yield the same upload_id.
+   */
   [[nodiscard]] Result<MultipartUpload>
     StartUpload(const ObjectId& object, std::size_t expected_total_size = 0,
                 const std::string& idempotency_key = {});
 
   /**
-   * @brief 预先把 GPU device buffer 注册到 cuObj descriptor 表。可选优化。
+   * @brief Pre-registers a GPU device buffer with the cuObject descriptor
+   *        table (GDS path optimisation).
    *
-   * GDS 通路下，每次 PUT/GET 之前 buffer 必须已经通过 cuMemObjGetDescriptor
-   * 注册（pin 到 BAR1）。不调本接口时 SDK 会在第一次传输时 lazy 注册，但
-   * 注册是毫秒级 syscall（nvidia_p2p_get_pages），落到热路径会抖动。
-   * 推荐：cudaMalloc 之后立即 RegisterDeviceBuffer，cudaFree 之前
-   * UnregisterDeviceBuffer。idempotent。
+   * On the GDS path each PUT/GET requires the buffer to be pinned into the
+   * GPU BAR1 region via cuMemObjGetDescriptor. Without an explicit
+   * registration the SDK pins lazily on the first transfer; this lazy pin
+   * involves a millisecond-scale syscall (nvidia_p2p_get_pages) on the
+   * hot path. Calling this method right after cudaMalloc amortises the
+   * pin cost outside the transfer path.
    *
-   * 非 GDS 通路（HTTP / RDMA）下本调用 no-op，返回 success。
+   * @param ptr  Device pointer obtained from cudaMalloc.
+   * @param size Region size in bytes.
+   *
+   * @note Idempotent: re-registering the same ptr returns Success.
+   * @note On non-GDS transports this call is a no-op that returns Success.
+   * @see Client::UnregisterDeviceBuffer
    */
   [[nodiscard]] Result<bool> RegisterDeviceBuffer(void* ptr, std::size_t size);
 
   /**
-   * @brief 反注册 device buffer。**必须在 cudaFree(ptr) 之前调用**，否则
-   * nvidia-fs 可能在内核侧死锁（NVIDIA 文档明确警告）。idempotent；从未
-   * 注册或已反注册过的 ptr 也返回 success。
+   * @brief Releases a buffer previously registered by RegisterDeviceBuffer.
+   *
+   * @warning Must be called BEFORE cudaFree(ptr). NVIDIA documentation
+   *          warns that freeing CUDA memory while the descriptor is still
+   *          held by cuObjClient can deadlock the nvidia-fs kernel module.
+   *
+   * @note Idempotent: unregistering an unknown ptr returns Success.
+   * @note On non-GDS transports this call is a no-op that returns Success.
    */
   [[nodiscard]] Result<bool> UnregisterDeviceBuffer(void* ptr);
 

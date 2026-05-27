@@ -43,6 +43,8 @@ void RdmaSessionSweeper::Run() {
   while (running_.load(std::memory_order_acquire)) {
     {
       std::unique_lock<std::mutex> lk(mu_);
+      // 例外类别 1（docs/code-review-process.md §4.3）：cv_.wait_for 强制要求
+      // 一个 nullary callable 返回 bool，标准库没法接 mem-fn ptr。
       cv_.wait_for(lk, sweep_interval_, [this] {
         return !running_.load(std::memory_order_acquire);
       });

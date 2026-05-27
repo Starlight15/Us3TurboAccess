@@ -79,13 +79,18 @@ Result<bool> RdmaExecutor::Start() {
   connection_registry_ = std::make_unique<RdmaConnectionRegistry>();
   // 连接销毁前先释放挂在它 PD 上的所有 session（dereg MR + free buffer），
   // 否则 ibv_dealloc_pd 会带走仍被 MR 引用的 PD，触发 UB。
+  // EraseSessionsCb 把 set_on_release 的 vector callback 转给 session_registry_。
+  struct EraseSessionsCb {
+    RdmaSessionRegistry* registry;
+    void operator()(const std::vector<std::string>& session_ids) const {
+      if (registry == nullptr) return;
+      for (const auto& sid : session_ids) {
+        (void)registry->Erase(sid);
+      }
+    }
+  };
   connection_registry_->set_on_release(
-      [this](const std::vector<std::string>& session_ids) {
-        if (session_registry_ == nullptr) return;
-        for (const auto& sid : session_ids) {
-          (void)session_registry_->Erase(sid);
-        }
-      });
+      EraseSessionsCb{session_registry_.get()});
   listener_ = std::make_unique<RdmaListener>(
       resources_, connection_registry_.get(), opts_, io_pool_, logger_);
   auto started = listener_->Start(bind_host_);
@@ -99,12 +104,17 @@ Result<bool> RdmaExecutor::Start() {
 
   // TTL > 0 才起 sweeper；sweeper 在锁外通过 callback 调 AbortSession 路径，
   // 顺手做 backend 资源回收 + DetachSession（与 client AbortSession RPC 一致）。
+  // SweeperAbortCb 把 sweeper 的过期回调路由到本 executor 的 AbortSession。
+  struct SweeperAbortCb {
+    RdmaExecutor* exec;
+    void operator()(const std::string& session_id) const {
+      (void)exec->AbortSession(session_id);
+    }
+  };
   if (opts_.session_ttl.count() > 0) {
     sweeper_ = std::make_unique<RdmaSessionSweeper>(
         *session_registry_, opts_.session_sweep_interval,
-        [this](const std::string& session_id) {
-          (void)this->AbortSession(session_id);
-        },
+        SweeperAbortCb{this},
         logger_);
     sweeper_->Start();
   }
@@ -234,30 +244,30 @@ Result<RdmaBindInfo> RdmaExecutor::BindSessionToConnection(
             : "rdma session bind already in progress"));
   }
 
-  // 失败回滚 helper：CAS 状态归位 + 释放半成品资源。
-  auto rollback = [&]() {
-    entry->bind_state.store(RdmaSessionBindState::kUnbound,
-                              std::memory_order_release);
-  };
+  // 失败时把 CAS 抢到的 kBinding 状态归位回 kUnbound，让下一次 Bind 可以再来。
+  // 仅一行，沿着错误路径手动写出而不抽 lambda，便于回看时不会漏掉某条路径。
 
   const std::size_t cap = RoundUpPage(entry->expected_bytes);
   void* buf = std::aligned_alloc(kPageSize, cap);
   if (buf == nullptr) {
-    rollback();
+    entry->bind_state.store(RdmaSessionBindState::kUnbound,
+                              std::memory_order_release);
     return Result<RdmaBindInfo>::Failure(MakeRdmaError("aligned_alloc failed"));
   }
   if (::mlock(buf, cap) != 0) {
     std::free(buf);
-    rollback();
+    entry->bind_state.store(RdmaSessionBindState::kUnbound,
+                              std::memory_order_release);
     return Result<RdmaBindInfo>::Failure(MakeRdmaError(
-        "mlock failed (ulimit -l 不足?)"));
+        "mlock failed (check `ulimit -l`)"));
   }
   ibv_mr* mr = ibv_reg_mr(conn->pd, buf, cap,
                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
   if (mr == nullptr) {
     ::munlock(buf, cap);
     std::free(buf);
-    rollback();
+    entry->bind_state.store(RdmaSessionBindState::kUnbound,
+                              std::memory_order_release);
     return Result<RdmaBindInfo>::Failure(MakeRdmaError("ibv_reg_mr failed"));
   }
 

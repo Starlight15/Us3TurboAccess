@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include <brpc/controller.h>
@@ -19,6 +20,16 @@ namespace us3_turbo_access::client {
 namespace {
 
 constexpr DataPath kPath = DataPath::kHttpTcp;
+
+// 把 key=value 拼到 uri 上，第一个加 '?'，后续加 '&'。uri 末尾扫一遍判断
+// 是否已经带过 '?'，避免维护额外 first_q 状态。
+void AppendQueryParam(std::string& uri, std::string_view key,
+                       std::string_view value) {
+  uri += (uri.find('?') == std::string::npos) ? '?' : '&';
+  uri.append(key);
+  uri += '=';
+  uri.append(value);
+}
 
 RpcCallMetadata MakeContext(const ClientOptions& options) {
   return RpcCallMetadata{
@@ -315,19 +326,12 @@ Result<HttpDataClient::StartUploadResp> HttpDataClient::StartUploadOnce(
   std::string uri = BuildUploadInitUri(channel_.options().endpoint,
                                          object.bucket, object.key);
   // query 串：expected_total_size + idempotency_key（按需）
-  bool first_q = true;
-  auto append_q = [&](const std::string& k, const std::string& v) {
-    uri += (first_q ? '?' : '&');
-    first_q = false;
-    uri += k;
-    uri += '=';
-    uri += v;
-  };
   if (expected_total_size > 0) {
-    append_q("expected_total_size", std::to_string(expected_total_size));
+    AppendQueryParam(uri, "expected_total_size",
+                      std::to_string(expected_total_size));
   }
   if (!idempotency_key.empty()) {
-    append_q("idempotency_key", idempotency_key);
+    AppendQueryParam(uri, "idempotency_key", idempotency_key);
   }
   cntl.http_request().uri() = uri;
   cntl.http_request().set_method(brpc::HTTP_METHOD_POST);
@@ -493,6 +497,10 @@ Result<bool> HttpDataClient::AbortUploadOnce(const std::string& upload_id) const
 // 幂等方法（HEAD/GET/PUT/StartUpload/UploadPart/AbortUpload）走 RetryIfRetryable；
 // CompleteUpload 不重试（max_attempts=1）：part_number+etag 决定的"成功一次"
 // 在中间结果不确定下重试可能造成"已 Complete 又 Complete"的歧义。
+//
+// 下面 7 处 [&]{ return XxxOnce(...); } 属于 docs/code-review-process.md
+// §4.3 例外类别 1（STL 风格 nullary 谓词 + 单语句 + 仅本翻译单元内单点
+// 使用），允许保留，避免给每个 Once 方法多套一层 binder struct。
 
 Result<ObjectMetadata> HttpDataClient::HeadObject(const ObjectId& object) const {
   return RetryIfRetryable(MakeRetryPolicy(channel_.options().http),

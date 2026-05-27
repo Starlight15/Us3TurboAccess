@@ -14,75 +14,105 @@
 namespace us3_turbo_access::client {
 
 /**
- * GDS 路径专属配置。当前 GDS 走 cuObject SDK，没什么可调参数。
- * 留作扩展位，避免后续加 GDS 配置时再次改 ClientOptions 顶层结构。
+ * @brief GDS-specific client tuning.
+ *
+ * The current GDS transport delegates scheduling to the cuObject SDK and
+ * exposes no tunables. This struct is reserved so future GDS options can
+ * be added without breaking the top-level ClientOptions layout.
  */
 struct GdsClientOptions {
-  // 占位：未来可加 cuObj 调度/缓冲/checksum 等。
+  // Reserved for future cuObject scheduling / buffer / checksum tuning.
 };
 
 /**
- * HTTP 路径专属配置。所有超时仍走顶层 default_timeout。
+ * @brief HTTP transport tunables.
+ *
+ * Common timeouts continue to flow through ClientOptions::default_timeout;
+ * fields here are HTTP-only behaviours.
  */
 struct HttpClientOptions {
-  // V2 — 并发下载
-  std::size_t parallel_get_threshold{16ULL * 1024 * 1024};  // 单 GET 触发并发分片的最小长度
-  std::size_t parallel_get_chunks{8};                        // 每个大对象拆几路并发
+  /** Object length above which GetObject splits into parallel sub-ranges. */
+  std::size_t parallel_get_threshold{16ULL * 1024 * 1024};
+  /** Number of parallel sub-ranges issued by split GETs. */
+  std::size_t parallel_get_chunks{8};
 
-  // V2 — 校验和
-  bool send_crc32c{true};            // PUT/UploadPart 时算 CRC32C 注入 header
-  bool verify_response_crc32c{true}; // 收到 x-amz-checksum-crc32c 时对比 client 算的（占位，本期未使用）
+  /** Inject x-amz-checksum-crc32c on PUT / UploadPart. */
+  bool send_crc32c{true};
+  /** Verify server-echoed x-amz-checksum-crc32c against the client value. */
+  bool verify_response_crc32c{true};
 
-  // V2 — 重试（HttpDataClient 各方法外层 wrapper 使用）
+  /** Maximum total attempts (including the initial one) for retried calls. */
   int max_retry_attempts{3};
+  /** Initial exponential backoff delay between retries. */
   std::chrono::milliseconds retry_initial_backoff{std::chrono::milliseconds(100)};
+  /** Upper bound for the exponential backoff between retries. */
   std::chrono::milliseconds retry_max_backoff{std::chrono::milliseconds(2000)};
 };
 
 /**
- * Native RDMA 路径专属配置。所有参数都是硬件相关或连接池相关。
- * 不与 GDS 共享。
+ * @brief Native RDMA transport tunables (hardware + connection pool).
+ *
+ * Independent from GdsClientOptions: the two transports use different
+ * libraries (libibverbs vs cuObject) and do not share state.
  */
 struct RdmaClientOptions {
-  // 设备选择
-  std::string device_name;                   // 空 = auto，取第一个 active HCA
-  int         gid_index{0};                  // RoCE 必填；IB 默认 0
+  /** RDMA HCA name; empty selects the first active device on the host. */
+  std::string device_name;
+  /** GID index used for RoCE; ignored on IB. */
+  int         gid_index{0};
+  /** InfiniBand port number to open on the selected HCA. */
   std::uint8_t ib_port{1};
 
-  // 单次传输上限（按 NIC WQE / max_msg 决定，默认 4 GiB）
+  /** Maximum bytes per single RDMA transfer; capped by NIC WQE / max_msg. */
   std::size_t max_msg_bytes{4ULL * 1024ULL * 1024ULL * 1024ULL};
 
-  // 连接池（C4b 起生效）
+  /** Maximum idle connections kept per (gateway endpoint) bucket. */
   std::size_t pool_max_idle_per_endpoint{8};
+  /** Idle timeout before a pooled connection is reclaimed. */
   std::chrono::milliseconds pool_idle_timeout{std::chrono::seconds(60)};
+  /** Timeout for the initial RDMA-CM resolve+connect handshake. */
   std::chrono::milliseconds connect_timeout{std::chrono::seconds(5)};
 
-  // 完成线程（C5a 起生效）
+  /** Size of the libibverbs completion queue. */
   int  cq_size{4096};
+  /** Run the CQ poller in a dedicated thread instead of inline. */
   bool dedicated_completion_thread{true};
 };
 
 /**
- * @brief 客户端实例配置。
+ * @brief Client instance configuration.
  *
- * 顶层只保留与具体 path 无关的参数（endpoint / timeout / logger 等）；
- * 路径相关参数收纳到对应子结构（gds / rdma），避免不同硬件路径配置互相污染。
+ * Top-level fields are transport-agnostic (endpoint / timeout / logger).
+ * Transport-specific knobs live in the nested options (gds / rdma / http)
+ * so unrelated paths do not pollute each other's namespace.
  */
 struct ClientOptions {
+  /** Gateway endpoint in "host:port" form. */
   std::string endpoint;
+  /** Identifier reported to the gateway for telemetry and logs. */
   std::string client_id{"us3-turbo-access-client"};
+  /** Optional bearer token included in outbound requests. */
   std::string bearer_token;
+  /** Headers attached to every outbound HTTP request. */
   std::unordered_map<std::string, std::string> default_headers;
+  /** Default per-request timeout when RequestOptions::timeout is unset. */
   std::chrono::milliseconds default_timeout{std::chrono::milliseconds(30000)};
+  /** Data transport selected for transfer operations. */
   DataPath data_path{DataPath::kGdsCuObject};
+  /** Optional logger; if null, the client falls back to a null sink. */
   std::shared_ptr<spdlog::logger> logger;
 
-  // *Async API 用的线程池大小；0 = 由 ClientCore 默认（hardware_concurrency 折半，至少 1）。
+  /**
+   * Worker threads backing the *Async API. Set to 0 to let ClientCore pick
+   * a default (hardware_concurrency / 2, minimum 1).
+   */
   std::size_t async_worker_threads{0};
 
-  // 路径专属子配置
+  /** GDS-specific tunables. */
   GdsClientOptions  gds;
+  /** RDMA-specific tunables. */
   RdmaClientOptions rdma;
+  /** HTTP-specific tunables. */
   HttpClientOptions http;
 };
 

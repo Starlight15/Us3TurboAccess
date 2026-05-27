@@ -22,6 +22,14 @@
 namespace us3_turbo_access::client {
 
 struct ClientCore::Impl {
+  /* HttpTransferPath 需要并发 GET 的 worker 池；它在 Initialize 才被创建，
+   * 而 Impl 构造期 async_executor 还是空。这里给一个稳定的 functor，每次
+   * 调用直接从 Impl 取最新 async_executor 指针，未就绪自动降级单连接。*/
+  struct AsyncExecutorAccessor {
+    Impl* impl;
+    ClientExecutor* operator()() const { return impl->async_executor.get(); }
+  };
+
   explicit Impl(ClientOptions opts)
       : options(std::move(opts)),
         caps(DetectPlatformCapabilities(options)),
@@ -35,12 +43,8 @@ struct ClientCore::Impl {
                                       .memory_registry = gds_memory_registry,
                                       .cuobj_client = cuobject_client}),
         rdma_executor(options, metadata_client, rdma_data_plane_client),
-        // 并发 GET 用 async_executor；构造时它还未初始化（Initialize 才创建），
-        // 用 provider lambda 延后取，未就绪自动降级为单连接。
         http_executor(options, http_data_client,
-                       [this]() -> ClientExecutor* {
-                         return async_executor.get();
-                       }),
+                       AsyncExecutorAccessor{this}),
         transfer_router(options.data_path, gds_executor, rdma_executor,
                         http_executor) {}
 

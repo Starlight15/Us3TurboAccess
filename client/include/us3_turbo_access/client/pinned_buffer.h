@@ -9,18 +9,27 @@
 namespace us3_turbo_access::client {
 
 /**
- * Host pinned buffer 的 RAII 包装；释放在析构。
+ * @brief RAII wrapper for a pinned host buffer used by the RDMA transport.
  *
- * Native RDMA 路径要求 buffer 落在 pinned 物理页（不被 swap 出去）。
- * 用户可以用本 helper 一次性分配 + 自动释放；也可以自带 mlock 的 buffer
- * 并把 BufferType 标成 kHostPinned 直接传入 PutObject。
+ * The native RDMA transport requires upload/download buffers to reside in
+ * physically pinned (non-pageable) host pages. This helper allocates the
+ * buffer through cudaHostAlloc, which provides genuine pinned memory even
+ * on hosts without a discrete GPU (cudart is already a hard dependency).
  *
- * 实现选择：底层用 cudaHostAlloc（cudart 已链接），即便不用 GPU 也能拿到
- * 真正 pinned 的 host 页。需要时可改成 mlock。
+ * Callers that already own a pinned buffer (e.g. via mlock) may instead
+ * pass a ConstBufferView with BufferType::kHostPinned directly to
+ * Client::PutObject; this class is just a convenience.
+ *
+ * Ownership is move-only; the destructor returns the buffer to cudart.
  */
 class PinnedBuffer {
  public:
-  /** 分配一段 size 字节的 pinned host buffer。失败返回 Result::Failure。*/
+  /**
+   * @brief Allocates a pinned host buffer of @p size bytes.
+   *
+   * @return PinnedBuffer wrapped in Result on success; Failure carries the
+   *         underlying CUDA error message.
+   */
   [[nodiscard]] static Result<PinnedBuffer> Allocate(std::size_t size);
 
   PinnedBuffer() = default;
@@ -31,25 +40,35 @@ class PinnedBuffer {
   PinnedBuffer(PinnedBuffer&& other) noexcept;
   PinnedBuffer& operator=(PinnedBuffer&& other) noexcept;
 
+  /** @brief Returns the raw buffer pointer; nullptr if not allocated. */
   [[nodiscard]] void*       data() noexcept       { return data_; }
+  /** @brief Const overload of data(). */
   [[nodiscard]] const void* data() const noexcept { return data_; }
+  /** @brief Returns the allocation size in bytes; 0 if not allocated. */
   [[nodiscard]] std::size_t size() const noexcept { return size_; }
+  /** @brief Returns true when the buffer is allocated. */
   [[nodiscard]] bool        ok()   const noexcept { return data_ != nullptr; }
 
-  /** 给 PutObject 用：拼装成只读视图。*/
+  /** @brief Returns a read-only view suitable for PutObject. */
   [[nodiscard]] ConstBufferView view() const noexcept {
     return ConstBufferView{.data = data_,
                             .size = size_,
                             .type = BufferType::kHostPinned};
   }
-  /** 给 GetObject 用：拼装成可写视图。*/
+
+  /** @brief Returns a mutable view suitable for GetObject. */
   [[nodiscard]] MutableBufferView mutable_view() noexcept {
     return MutableBufferView{.data = data_,
                               .size = size_,
                               .type = BufferType::kHostPinned};
   }
 
-  /** 释放（手动）。析构会自动调用，调用方一般不需要 */
+  /**
+   * @brief Releases the buffer ahead of destruction.
+   *
+   * Rarely needed; the destructor performs the same cleanup. Safe to call
+   * multiple times; subsequent calls are no-ops.
+   */
   void Reset() noexcept;
 
  private:

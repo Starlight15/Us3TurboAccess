@@ -160,6 +160,20 @@ void RdmaListener::EventLoop() {
   }
 }
 
+namespace {
+
+// CONNECT_REQUEST 任一步失败的统一回收路径：记 error log → reject → 销毁 cm_id。
+// 调用方负责按逆序回收已经申请的 pd / cq / qp（在 RejectAndDestroy 之前）。
+void RejectAndDestroy(rdma_cm_id* id, spdlog::logger* logger, const char* what) {
+  if (logger != nullptr) {
+    logger->error("rdma: {}", what);
+  }
+  rdma_reject(id, nullptr, 0);
+  rdma_destroy_id(id);
+}
+
+}  // namespace
+
 /*
  * CONNECT_REQUEST 处理：只建连接级资源，不分配 session 级 buffer/MR。
  *   1. 在 cm_id->verbs 上 alloc PD / create CQ（必须同 context）
@@ -170,28 +184,23 @@ void RdmaListener::EventLoop() {
  * 任一步失败 → 按逆序回收已申请的资源 + reject。
  */
 void RdmaListener::HandleConnectRequest(rdma_cm_id* id) {
-  auto fail = [&](const char* what) {
-    if (logger_ != nullptr) {
-      logger_->error("rdma: {}", what);
-    }
-    rdma_reject(id, nullptr, 0);
-    rdma_destroy_id(id);
-  };
-
   if (connection_registry_ == nullptr) {
-    fail("connection registry is null");
+    RejectAndDestroy(id, logger_.get(), "connection registry is null");
     return;
   }
 
   ibv_pd* pd = ibv_alloc_pd(id->verbs);
-  if (pd == nullptr) { fail("ibv_alloc_pd failed"); return; }
+  if (pd == nullptr) {
+    RejectAndDestroy(id, logger_.get(), "ibv_alloc_pd failed");
+    return;
+  }
   // CQ 容量按 max_send_wr+max_recv_wr 给个宽松上限；实际服务端不主动发 WR，
   // 只接 client RDMA WRITE（不会进 CQ），CQ 主要是 QP 创建的形式要求。
   ibv_cq* cq = ibv_create_cq(id->verbs, /*cqe=*/64, /*ctx=*/nullptr,
                               /*channel=*/nullptr, /*comp_vector=*/0);
   if (cq == nullptr) {
     (void)ibv_dealloc_pd(pd);
-    fail("ibv_create_cq failed");
+    RejectAndDestroy(id, logger_.get(), "ibv_create_cq failed");
     return;
   }
 
@@ -207,7 +216,7 @@ void RdmaListener::HandleConnectRequest(rdma_cm_id* id) {
   if (rdma_create_qp(id, pd, &qp_attr) != 0) {
     (void)ibv_destroy_cq(cq);
     (void)ibv_dealloc_pd(pd);
-    fail("rdma_create_qp failed");
+    RejectAndDestroy(id, logger_.get(), "rdma_create_qp failed");
     return;
   }
 

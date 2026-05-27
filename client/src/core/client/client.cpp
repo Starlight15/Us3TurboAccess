@@ -183,20 +183,25 @@ Result<TransferOutcome> MultipartUpload::UploadPart(std::uint32_t part_number,
     checksum_policy = impl_->checksum_policy;
   }
 
-  Result<TransferOutcome> outcome = [&]() {
-    switch (impl_->data_path) {
-      case DataPath::kNativeRdma:
-        return UploadPartRdma(*impl_->core, impl_->object, checksum_policy,
+  // 按 data_path 分发：GDS / RDMA 走 control plane + 各自数据面；
+  // HTTP 走纯 HTTP UploadPart 路径。
+  Result<TransferOutcome> outcome = Result<TransferOutcome>::Failure(
+      MakeInvalidArgument("unreachable"));
+  switch (impl_->data_path) {
+    case DataPath::kNativeRdma:
+      outcome = UploadPartRdma(*impl_->core, impl_->object, checksum_policy,
                                 impl_->upload_id, part_number, object_offset, buffer);
-      case DataPath::kHttpTcp:
-        return UploadPartHttp(*impl_->core, impl_->object, checksum_policy,
+      break;
+    case DataPath::kHttpTcp:
+      outcome = UploadPartHttp(*impl_->core, impl_->object, checksum_policy,
                                 impl_->upload_id, part_number, object_offset, buffer);
-      case DataPath::kGdsCuObject:
-      default:
-        return UploadPartGds(*impl_->core, impl_->object, checksum_policy,
-                              impl_->upload_id, part_number, object_offset, buffer);
-    }
-  }();
+      break;
+    case DataPath::kGdsCuObject:
+    default:
+      outcome = UploadPartGds(*impl_->core, impl_->object, checksum_policy,
+                                impl_->upload_id, part_number, object_offset, buffer);
+      break;
+  }
   if (!outcome.success()) {
     return outcome;
   }
@@ -212,76 +217,135 @@ Result<TransferOutcome> MultipartUpload::UploadPart(std::uint32_t part_number,
   return outcome;
 }
 
-// 并发上传多个 part。cuObj 调用被 g_cuobj_global_mu 串行化，
-// 并发收益体现在 OpenSession / RegisterPart 等阶段以及 gateway 侧 io_pool。
+namespace {
+
+// 多 part 并发上传共享状态：next_index 派发下一笔，first_error fail-fast，
+// outcomes 按 index 写回。
+struct PartUploadShared {
+  MultipartUpload*                     upload;
+  const std::vector<MultipartUpload::PartSpec>* parts;
+  std::vector<TransferOutcome>*        outcomes;
+  std::atomic<std::size_t>             next_index{0};
+  std::mutex                           error_mu;
+  std::optional<Error>                 first_error;
+  int                                  main_device{0};
+};
+
+class PartUploadWorker {
+ public:
+  explicit PartUploadWorker(PartUploadShared* shared) noexcept
+      : shared_(shared) {}
+
+  void operator()() const {
+    // cuObj / cuFile 要求每个 worker 入口 cudaSetDevice 绑当前 GPU；非 GDS 路径
+    // cudaSetDevice 仍 cheap，做了无害。
+    if (cudaSetDevice(shared_->main_device) != cudaSuccess) {
+      RecordError(MakeInvalidArgument(
+          "worker cudaSetDevice failed; cannot bind CUDA context"));
+      return;
+    }
+    while (true) {
+      const auto idx = shared_->next_index.fetch_add(
+          1, std::memory_order_acq_rel);
+      if (idx >= shared_->parts->size()) return;
+      if (HasError()) return;  // fail-fast：先到的失败短路其余 worker
+
+      const auto& spec = (*shared_->parts)[idx];
+      auto r = shared_->upload->UploadPart(spec.part_number,
+                                            spec.object_offset, spec.buffer);
+      if (r.success()) {
+        (*shared_->outcomes)[idx] = std::move(r.value());
+      } else {
+        RecordError(r.error());
+      }
+    }
+  }
+
+ private:
+  bool HasError() const {
+    std::scoped_lock lock(shared_->error_mu);
+    return shared_->first_error.has_value();
+  }
+
+  void RecordError(Error e) const {
+    std::scoped_lock lock(shared_->error_mu);
+    if (!shared_->first_error.has_value()) shared_->first_error = std::move(e);
+  }
+
+  PartUploadShared* shared_;
+};
+
+}  // namespace
+
+// 并发上传多个 part。GDS path 内部已 token 直通可并发；RDMA / HTTP 每 worker
+// 独立 RPC。fail-fast：任一 part 失败短路其余在飞 worker（但仍 join 等回收）。
 Result<std::vector<TransferOutcome>>
 MultipartUpload::UploadParts(const std::vector<PartSpec>& parts,
                               std::size_t concurrency) {
   if (parts.empty()) {
     return Result<std::vector<TransferOutcome>>::Success({});
   }
-  if (concurrency == 0) {
-    concurrency = 1;
-  }
-  if (concurrency > parts.size()) {
-    concurrency = parts.size();
-  }
-
-  // cuObj/cuFile 需要每个 worker 显式 cudaSetDevice，先捕获主线程的当前 device。
-  int main_device = 0;
-  (void)cudaGetDevice(&main_device);
+  if (concurrency == 0) concurrency = 1;
+  if (concurrency > parts.size()) concurrency = parts.size();
 
   std::vector<TransferOutcome> outcomes(parts.size());
-  std::atomic<std::size_t>     next_index{0};
-  std::mutex                   error_mu;
-  std::optional<Error>         first_error;
-
-  auto worker = [&]() {
-    if (cudaSetDevice(main_device) != cudaSuccess) {
-      std::scoped_lock lock(error_mu);
-      if (!first_error.has_value()) {
-        first_error = MakeInvalidArgument(
-            "worker cudaSetDevice failed; cannot bind CUDA context");
-      }
-      return;
-    }
-    while (true) {
-      const auto idx = next_index.fetch_add(1, std::memory_order_acq_rel);
-      if (idx >= parts.size()) {
-        return;
-      }
-      {
-        std::scoped_lock lock(error_mu);
-        if (first_error.has_value()) {
-          return;
-        }
-      }
-      const auto& spec = parts[idx];
-      auto r = UploadPart(spec.part_number, spec.object_offset, spec.buffer);
-      if (!r.success()) {
-        std::scoped_lock lock(error_mu);
-        if (!first_error.has_value()) {
-          first_error = r.error();
-        }
-      } else {
-        outcomes[idx] = std::move(r.value());
-      }
-    }
-  };
+  PartUploadShared shared;
+  shared.upload   = this;
+  shared.parts    = &parts;
+  shared.outcomes = &outcomes;
+  (void)cudaGetDevice(&shared.main_device);
 
   std::vector<std::thread> threads;
   threads.reserve(concurrency);
   for (std::size_t i = 0; i < concurrency; ++i) {
-    threads.emplace_back(worker);
+    threads.emplace_back(PartUploadWorker(&shared));
   }
-  for (auto& t : threads) {
-    t.join();
-  }
-  if (first_error.has_value()) {
-    return Result<std::vector<TransferOutcome>>::Failure(*first_error);
+  for (auto& t : threads) t.join();
+
+  if (shared.first_error.has_value()) {
+    return Result<std::vector<TransferOutcome>>::Failure(*shared.first_error);
   }
   return Result<std::vector<TransferOutcome>>::Success(std::move(outcomes));
 }
+
+namespace {
+
+// HTTP 路径走独立的 /v1/uploads/{upload_id}/complete；其它路径走 baidu_std
+// metadata_client.CompleteUpload。两者结构体不同所以分两条路径分别组装结果。
+Result<CompleteUploadResult> CompleteUploadHttp(
+    ClientCore& core, const std::string& upload_id,
+    const std::vector<PartCompletion>& parts) {
+  std::vector<HttpDataClient::PartEtag> http_parts;
+  http_parts.reserve(parts.size());
+  for (const auto& p : parts) {
+    http_parts.push_back({p.part_number, p.etag});
+  }
+  auto out = core.http_data_client().CompleteUpload(upload_id, http_parts);
+  if (!out.success()) {
+    return Result<CompleteUploadResult>::Failure(out.error());
+  }
+  CompleteUploadResult r;
+  r.etag           = out.value().etag;
+  r.version        = out.value().version;
+  r.content_length = out.value().content_length;
+  return Result<CompleteUploadResult>::Success(std::move(r));
+}
+
+Result<CompleteUploadResult> CompleteUploadControlPlane(
+    ClientCore& core, const std::string& upload_id,
+    const std::vector<PartCompletion>& parts) {
+  auto out = core.metadata_client().CompleteUpload(upload_id, parts);
+  if (!out.success()) {
+    return Result<CompleteUploadResult>::Failure(out.error());
+  }
+  CompleteUploadResult r;
+  r.etag           = out.value().etag;
+  r.version        = out.value().version;
+  r.content_length = out.value().content_length;
+  return Result<CompleteUploadResult>::Success(std::move(r));
+}
+
+}  // namespace
 
 Result<CompleteUploadResult> MultipartUpload::Complete() {
   std::vector<PartCompletion> parts_copy;
@@ -294,37 +358,11 @@ Result<CompleteUploadResult> MultipartUpload::Complete() {
     parts_copy = impl_->parts;
   }
 
-  // 按 data_path 分发：GDS / RDMA 走 control plane（baidu_std）；
-  // HTTP 走 HTTP /v1/uploads/{upload_id}/complete。
-  Result<CompleteUploadResult> result = [&]() -> Result<CompleteUploadResult> {
-    if (impl_->data_path == DataPath::kHttpTcp) {
-      std::vector<HttpDataClient::PartEtag> http_parts;
-      http_parts.reserve(parts_copy.size());
-      for (const auto& p : parts_copy) {
-        http_parts.push_back({p.part_number, p.etag});
-      }
-      auto out = impl_->core->http_data_client().CompleteUpload(
-          impl_->upload_id, http_parts);
-      if (!out.success()) {
-        return Result<CompleteUploadResult>::Failure(out.error());
-      }
-      CompleteUploadResult r;
-      r.etag           = out.value().etag;
-      r.version        = out.value().version;
-      r.content_length = out.value().content_length;
-      return Result<CompleteUploadResult>::Success(std::move(r));
-    }
-    auto out = impl_->core->metadata_client().CompleteUpload(impl_->upload_id,
-                                                              parts_copy);
-    if (!out.success()) {
-      return Result<CompleteUploadResult>::Failure(out.error());
-    }
-    CompleteUploadResult r;
-    r.etag           = out.value().etag;
-    r.version        = out.value().version;
-    r.content_length = out.value().content_length;
-    return Result<CompleteUploadResult>::Success(std::move(r));
-  }();
+  Result<CompleteUploadResult> result =
+      (impl_->data_path == DataPath::kHttpTcp)
+          ? CompleteUploadHttp(*impl_->core, impl_->upload_id, parts_copy)
+          : CompleteUploadControlPlane(*impl_->core, impl_->upload_id,
+                                        parts_copy);
 
   // Complete 成功 → finished=true，析构不再 abort。
   // Complete 失败 → best-effort abort 释放 server 端 upload（与 ~MultipartUpload
