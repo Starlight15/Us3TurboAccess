@@ -39,6 +39,7 @@ struct Args {
   std::size_t count        = 16;
   std::size_t object_size  = 4ULL * 1024 * 1024;
   std::size_t warmup       = 2;
+  std::size_t key_modulo   = 0;  // 0 = unique key per iter; N>0 = idx % N
   std::string bucket       = "us3-bench";
   std::string key_prefix   = "bench/gds-put/";
   std::uint64_t seed       = 0xC0FFEEULL;
@@ -65,6 +66,7 @@ bool ParseArgs(int argc, char** argv, Args& a) {
     if (auto v = eat("--count=");      !v.empty() && ParseULL(v, n)) { a.count = n; continue; }
     if (auto v = eat("--object-size=");!v.empty() && ParseULL(v, n)) { a.object_size = n; continue; }
     if (auto v = eat("--warmup=");     !v.empty() && ParseULL(v, n)) { a.warmup = n; continue; }
+    if (auto v = eat("--key-modulo=");!v.empty() && ParseULL(v, n))  { a.key_modulo = n; continue; }
     if (auto v = eat("--seed=");       !v.empty() && ParseULL(v, n)) { a.seed = n; continue; }
     std::cerr << "unknown arg: " << s << std::endl;
     return false;
@@ -140,10 +142,13 @@ int main(int argc, char** argv) {
   int main_device = 0;
   (void)cudaGetDevice(&main_device);
 
+  // key 模数：0 表示每次唯一 key（总存储无界）；>0 表示 idx % N，限制 N
+  // 个不同对象循环 overwrite，避免长时间测试把后端容量吃满。
+  const std::size_t key_mod = a.key_modulo > 0 ? a.key_modulo : a.count;
   auto do_put = [&](std::size_t idx) -> Result<TransferOutcome> {
     RequestOptions req;
     req.object = ObjectId{.bucket = a.bucket,
-                          .key = a.key_prefix + std::to_string(idx)};
+                          .key = a.key_prefix + std::to_string(idx % key_mod)};
     req.length = a.object_size;
     void* dev = dev_pool[idx % pool_size];
     ConstBufferView v{.data = dev, .size = a.object_size,

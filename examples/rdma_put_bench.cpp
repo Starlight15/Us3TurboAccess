@@ -4,15 +4,18 @@
 // N 个 worker（ClientExecutor）并发 PutObjectAsync。RDMA QP / completion
 // driver / connection pool 在 V2 已落地，本 bench 不去 tweak 它们。
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <future>
 #include <iostream>
+#include <mutex>
 #include <random>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include "examples/common/bench_runner.h"
@@ -28,6 +31,7 @@ struct Args {
   std::size_t count        = 64;
   std::size_t object_size  = 4ULL * 1024 * 1024;
   std::size_t warmup       = 4;
+  std::size_t key_modulo   = 0;
   std::string bucket       = "us3-bench";
   std::string key_prefix   = "bench/rdma-put/";
   std::uint64_t seed       = 0xC0FFEEULL;
@@ -54,6 +58,7 @@ bool ParseArgs(int argc, char** argv, Args& a) {
     if (auto v = eat("--count=");      !v.empty() && ParseULL(v, n)) { a.count = n; continue; }
     if (auto v = eat("--object-size=");!v.empty() && ParseULL(v, n)) { a.object_size = n; continue; }
     if (auto v = eat("--warmup=");     !v.empty() && ParseULL(v, n)) { a.warmup = n; continue; }
+    if (auto v = eat("--key-modulo=");!v.empty() && ParseULL(v, n))  { a.key_modulo = n; continue; }
     if (auto v = eat("--seed=");       !v.empty() && ParseULL(v, n)) { a.seed = n; continue; }
     std::cerr << "unknown arg: " << s << std::endl;
     return false;
@@ -99,10 +104,12 @@ int main(int argc, char** argv) {
                            .size = a.object_size,
                            .type = BufferType::kHostPinned};
 
+  // key 模数：0=每次唯一 key；>0=idx % N 限制后端容量。
+  const std::size_t key_mod = a.key_modulo > 0 ? a.key_modulo : a.count;
   auto submit = [&](std::size_t idx) -> std::future<Result<TransferOutcome>> {
     RequestOptions req;
     req.object = ObjectId{.bucket = a.bucket,
-                          .key = a.key_prefix + std::to_string(idx)};
+                          .key = a.key_prefix + std::to_string(idx % key_mod)};
     req.length = a.object_size;
     return client.PutObjectAsync(req, buf_view);
   };
@@ -131,29 +138,55 @@ int main(int argc, char** argv) {
       .object_size = a.object_size,
       .warmup      = a.warmup,
   });
-  std::vector<std::future<Result<TransferOutcome>>> futures;
+
+  /* Bounded in-flight 模型：N 个 worker 同步循环
+   *   t0 = now(); PutObject(...).get(); t1 = now(); RecordLatency(t0,t1)
+   * 单笔 latency = 真实端到端 RPC 时延（不被 submit-all 队列尾巴污染）。
+   * N = a.threads（如果为 0 则默认 4）；总吞吐 = sum(N 路并发)。
+   */
+  const std::size_t workers = a.threads > 0 ? a.threads : 4;
   std::vector<std::chrono::steady_clock::time_point> starts(a.count);
-  futures.reserve(a.count);
+  std::vector<std::chrono::steady_clock::time_point> ends(a.count);
+  std::vector<bool> ok(a.count, false);
+  std::atomic<std::size_t> next_idx{0};
+  std::atomic<std::size_t> fail_count{0};
+  std::mutex err_mu;
+  std::string first_err;
+
+  auto worker = [&]() {
+    while (true) {
+      const auto i = next_idx.fetch_add(1, std::memory_order_acq_rel);
+      if (i >= a.count) return;
+      starts[i] = std::chrono::steady_clock::now();
+      // 同步等待，避免 submit-all 队列污染单笔时延
+      auto fut = submit(i);
+      auto r   = fut.get();
+      ends[i]  = std::chrono::steady_clock::now();
+      if (r.success()) {
+        ok[i] = true;
+      } else {
+        fail_count.fetch_add(1, std::memory_order_relaxed);
+        std::scoped_lock lk(err_mu);
+        if (first_err.empty()) first_err = r.error().message;
+      }
+    }
+  };
 
   runner.BeginMeasured();
+  std::vector<std::thread> ths;
+  ths.reserve(workers);
+  for (std::size_t i = 0; i < workers; ++i) ths.emplace_back(worker);
+  for (auto& t : ths) t.join();
   for (std::size_t i = 0; i < a.count; ++i) {
-    starts[i] = std::chrono::steady_clock::now();
-    futures.push_back(submit(i));
+    if (ok[i]) runner.RecordLatency(starts[i], ends[i]);
   }
-  std::size_t failed = 0;
-  for (std::size_t i = 0; i < a.count; ++i) {
-    auto r = futures[i].get();
-    const auto t1 = std::chrono::steady_clock::now();
-    if (!r.success()) {
-      ++failed;
-      std::cerr << "PUT " << i << " failed: " << r.error().message << std::endl;
-      continue;
-    }
-    runner.RecordLatency(starts[i], t1);
+  runner.End(fail_count.load());
+  if (fail_count.load() > 0) {
+    std::cerr << "PUT failures=" << fail_count.load()
+              << " first_err=" << first_err << std::endl;
   }
-  runner.End(failed);
 
   runner.PrintHuman(std::cerr);
   runner.PrintJson(std::cout);
-  return failed == 0 ? 0 : 1;
+  return fail_count.load() == 0 ? 0 : 1;
 }

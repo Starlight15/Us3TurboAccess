@@ -29,6 +29,7 @@ struct Args {
   std::size_t object_size  = 32ULL * 1024 * 1024;
   std::size_t part_size    = 8ULL  * 1024 * 1024;   // >= server min_part_size 5 MiB
   std::size_t warmup       = 1;
+  std::size_t key_modulo   = 0;
   std::string bucket       = "us3-bench";
   std::string key_prefix   = "bench/rdma-mp/";
   std::uint64_t seed       = 0xC0FFEEULL;
@@ -56,6 +57,7 @@ bool ParseArgs(int argc, char** argv, Args& a) {
     if (auto v = eat("--object-size=");!v.empty() && ParseULL(v, n)) { a.object_size = n; continue; }
     if (auto v = eat("--part-size=");  !v.empty() && ParseULL(v, n)) { a.part_size = n; continue; }
     if (auto v = eat("--warmup=");     !v.empty() && ParseULL(v, n)) { a.warmup = n; continue; }
+    if (auto v = eat("--key-modulo=");!v.empty() && ParseULL(v, n))  { a.key_modulo = n; continue; }
     if (auto v = eat("--seed=");       !v.empty() && ParseULL(v, n)) { a.seed = n; continue; }
     std::cerr << "unknown arg: " << s << std::endl;
     return false;
@@ -156,11 +158,12 @@ int main(int argc, char** argv) {
       .warmup      = a.warmup,
   });
 
+  const std::size_t key_mod = a.key_modulo > 0 ? a.key_modulo : a.count;
   std::size_t failed = 0;
   runner.BeginMeasured();
   for (std::size_t i = 0; i < a.count; ++i) {
     const auto t0 = std::chrono::steady_clock::now();
-    const bool ok = UploadOne(a.key_prefix + "iter-" + std::to_string(i));
+    const bool ok = UploadOne(a.key_prefix + "iter-" + std::to_string(i % key_mod));
     const auto t1 = std::chrono::steady_clock::now();
     if (!ok) { ++failed; continue; }
     runner.RecordLatency(t0, t1);
