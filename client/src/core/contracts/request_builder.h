@@ -16,6 +16,7 @@ struct SessionPlan {
   RequestOptions request;
   BufferType buffer_type;
   DataPath path;
+  bool is_multipart_part{false};
 };
 
 // 装配 ChunkOp 所需的输入参数集合。

@@ -39,6 +39,9 @@ struct OpenSessionParams {
   std::uint64_t offset{0};
   std::uint64_t expected_size{0};
   std::string   idempotency_key;
+  // multipart upload 的单个 part：data path 据此跳过整对象 Reserve；
+  // expected_size 解释为本 part 字节数。
+  bool          is_multipart_part{false};
 };
 
 /**
@@ -61,6 +64,7 @@ struct Session {
   std::uint64_t                        offset{0};
   std::uint64_t                        expected_size{0};
   std::string                          idempotency_key;
+  bool                                 is_multipart_part{false};
 
   std::atomic<SessionState>            state{SessionState::kOpened};
   std::chrono::steady_clock::time_point expire_deadline{};

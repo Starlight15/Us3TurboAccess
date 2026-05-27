@@ -1,0 +1,81 @@
+syntax = "proto3";
+
+package us3_turbo_access.gateway;
+
+option cc_generic_services = true;
+
+// 一次 RDMA 上传的协议时序：
+//   1) (control plane) OpenSession → session_id
+//   2) DiscoverRdmaEndpoint(session_id) → 取 gateway 的 RDMA 监听端点
+//   3) 客户端 CM connect 到端点；ESTABLISHED 时 server 通过 private_data
+//      回传 conn_token（标识本条已建好的 QP）
+//   4) BindSessionToConnection(session_id, conn_token) → 服务端在该连接的 PD
+//      上为 session 分配 buffer + reg MR，返回 raddr/rkey
+//   5) 客户端 RDMA WRITE → CommitObject 触发落盘 → 归还 QP 到本地连接池
+
+message RdmaDiscoverRequest {
+  string session_id = 1;
+}
+
+message RdmaDiscoverResponse {
+  string host = 1;
+  uint32 port = 2;
+  // 3 was device_gid (removed: client never reads; conn_token via CM ACCEPT
+  //                   private_data is the actual handshake)
+  uint64 max_msg_bytes = 4;
+  reserved 3;
+}
+
+message RdmaBindRequest {
+  string session_id = 1;
+  uint64 conn_token = 2;
+}
+
+message RdmaBindResponse {
+  uint64 raddr = 1;
+  uint32 rkey = 2;
+}
+
+// 单对象 RDMA WRITE 完成后调用，触发 gateway 把 buffer 落到 backend 对象。
+message RdmaCommitRequest {
+  string session_id = 1;
+  uint64 bytes_transferred = 2;
+  string client_checksum = 3;
+}
+
+message RdmaCommitResponse {
+  string etag = 1;
+  string version = 2;
+}
+
+// Multipart 单 part 完成。
+message RdmaCommitPartRequest {
+  string session_id = 1;
+  string upload_id = 2;
+  uint32 part_number = 3;
+  uint64 bytes_transferred = 4;
+  string client_checksum = 5;
+}
+
+message RdmaCommitPartResponse {
+  string part_etag = 1;
+}
+
+// 客户端在 PUT 流程的任意失败点（Bind / PostWrite / 等完成）调用，让 gateway
+// 立刻释放挂在该 session 上的 buffer/MR。若 session 已 commit 或不存在，
+// gateway 视为 no-op 返回成功。
+message RdmaAbortRequest {
+  string session_id = 1;
+}
+
+message RdmaAbortResponse {
+  bool erased = 1;  // 是否真的移除了一个 entry（信息性，客户端可忽略）
+}
+
+service RdmaDataPlaneService {
+  rpc DiscoverRdmaEndpoint(RdmaDiscoverRequest) returns (RdmaDiscoverResponse);
+  rpc BindSessionToConnection(RdmaBindRequest) returns (RdmaBindResponse);
+  rpc CommitObject(RdmaCommitRequest) returns (RdmaCommitResponse);
+  rpc CommitPart(RdmaCommitPartRequest) returns (RdmaCommitPartResponse);
+  rpc AbortSession(RdmaAbortRequest) returns (RdmaAbortResponse);
+}

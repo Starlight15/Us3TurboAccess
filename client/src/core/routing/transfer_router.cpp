@@ -14,10 +14,12 @@ namespace {
 }  // namespace
 
 TransferRouter::TransferRouter(DataPath data_path, const TransferPath& gds_executor,
-                               const TransferPath& rdma_executor)
+                               const TransferPath& rdma_executor,
+                               const TransferPath& http_executor)
     : data_path_(data_path),
       gds_executor_(gds_executor),
-      rdma_executor_(rdma_executor) {}
+      rdma_executor_(rdma_executor),
+      http_executor_(http_executor) {}
 
 Result<TransferOutcome> TransferRouter::GetObject(const RequestOptions& request,
                                                   MutableBufferView buffer) const {
@@ -43,6 +45,8 @@ const TransferPath* TransferRouter::SelectTransferPath() const {
       return &gds_executor_;
     case DataPath::kNativeRdma:
       return &rdma_executor_;
+    case DataPath::kHttpTcp:
+      return &http_executor_;
   }
   return nullptr;
 }

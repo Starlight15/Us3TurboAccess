@@ -1,6 +1,17 @@
 cmake_minimum_required(VERSION 3.24)
 project(Us3TurboAccess VERSION 0.1.0 LANGUAGES CXX)
 
+# 强制 out-of-tree build：禁止 cmake -S . -B . 之类把中间态生成在仓库根的
+# 用法，否则一次配置就会污染所有 add_subdirectory 子目录。请用 ./do_make.sh
+# 或 cmake -S <repo> -B <repo>/build。
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
+  message(FATAL_ERROR
+    "In-source builds are not allowed. "
+    "Run cmake from a separate build directory, e.g. "
+    "`cmake -S ${CMAKE_SOURCE_DIR} -B ${CMAKE_SOURCE_DIR}/build` "
+    "or use ./do_make.sh.")
+endif()
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
@@ -143,6 +154,18 @@ add_custom_command(
   VERBATIM)
 add_custom_target(us3_turbo_access_http_gateway_proto
   DEPENDS ${US3_TURBO_ACCESS_HTTP_PROTO_SRCS} ${US3_TURBO_ACCESS_HTTP_PROTO_HDRS})
+
+set(US3_TURBO_ACCESS_RDMA_PROTO_FILE ${US3_TURBO_ACCESS_GATEWAY_PROTO_DIR}/rdma_data_plane.proto)
+set(US3_TURBO_ACCESS_RDMA_PROTO_SRCS ${US3_TURBO_ACCESS_GENERATED_DIR}/rdma_data_plane.pb.cc)
+set(US3_TURBO_ACCESS_RDMA_PROTO_HDRS ${US3_TURBO_ACCESS_GENERATED_DIR}/rdma_data_plane.pb.h)
+add_custom_command(
+  OUTPUT ${US3_TURBO_ACCESS_RDMA_PROTO_SRCS} ${US3_TURBO_ACCESS_RDMA_PROTO_HDRS}
+  COMMAND protobuf::protoc
+  ARGS --cpp_out=${US3_TURBO_ACCESS_GENERATED_DIR} -I ${US3_TURBO_ACCESS_GATEWAY_PROTO_DIR} ${US3_TURBO_ACCESS_RDMA_PROTO_FILE}
+  DEPENDS ${US3_TURBO_ACCESS_RDMA_PROTO_FILE}
+  VERBATIM)
+add_custom_target(us3_turbo_access_rdma_data_plane_proto
+  DEPENDS ${US3_TURBO_ACCESS_RDMA_PROTO_SRCS} ${US3_TURBO_ACCESS_RDMA_PROTO_HDRS})
 
 add_subdirectory(client)
 add_subdirectory(gateway)

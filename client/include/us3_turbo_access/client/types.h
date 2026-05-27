@@ -23,10 +23,14 @@ using ErrorCode = ::us3_turbo_access::common::ErrorCode;
 
 /**
  * @brief Data transfer paths supported by the client.
+ *
+ * kHttpTcp 走标准 HTTP/1.1（与 server 端 http_master_service 对接），buffer
+ * 类型只接 kHostRegular；GDS / RDMA 各自独立通路。
  */
 enum class DataPath {
   kGdsCuObject,
   kNativeRdma,
+  kHttpTcp,
 };
 
 /**
@@ -124,6 +128,10 @@ struct TransferOutcome {
   std::string rdma_reply;
   std::string etag;
   std::string version;
+  /** HTTP 通路 PUT/UploadPart 成功后，从响应头 x-amz-checksum-crc32c 解出来的
+   *  server 端实算 CRC32C。client 收到后可与自己上传时算的对比做端到端校验。
+   *  其它通路（GDS/RDMA）暂不填。 */
+  std::optional<std::uint32_t> server_crc32c;
 };
 
 /**

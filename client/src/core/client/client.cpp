@@ -9,11 +9,15 @@
 #include <cuda_runtime.h>
 
 #include "client/src/control/metadata_client.h"
+#include "client/src/core/async/client_executor.h"
 #include "client/src/core/client/client_core.h"
 #include "client/src/core/common/errors.h"
 #include "client/src/core/contracts/request_builder.h"
+#include "client/src/core/http/http_transfer_path.h"
+#include "client/src/core/rdma/rdma_transfer_path.h"
 #include "client/src/core/routing/transfer_router.h"
 #include "client/src/data/gds_data_client.h"
+#include "client/src/data/http_data_client.h"
 #include "client/src/transports/gds/cuobject_client.h"
 #include "client/src/transports/gds/gds_memory_registry.h"
 
@@ -25,6 +29,7 @@ struct MultipartUpload::Impl {
   std::string    upload_id;
   std::size_t    max_part_size{0};
   std::string    checksum_policy{"none"};
+  DataPath       data_path{DataPath::kGdsCuObject};
 
   std::mutex                  mu;
   std::vector<PartCompletion> parts;
@@ -36,6 +41,9 @@ MultipartUpload::MultipartUpload(std::unique_ptr<Impl> impl)
     : impl_(std::move(impl)) {}
 
 MultipartUpload::~MultipartUpload() {
+  // 析构兜底：用户没 Complete 也没 Abort → best-effort 调对应通道的 AbortUpload。
+  // 注意必须按 data_path 分发：HTTP 的 upload_id 在 HTTP 端独立分配，baidu_std
+  // 的 metadata_client 不认；反之亦然。
   if (impl_ && !impl_->upload_id.empty() && impl_->core != nullptr) {
     bool need_abort = false;
     {
@@ -43,7 +51,11 @@ MultipartUpload::~MultipartUpload() {
       need_abort = !impl_->finished;
     }
     if (need_abort) {
-      (void)impl_->core->metadata_client().AbortUpload(impl_->upload_id);
+      if (impl_->data_path == DataPath::kHttpTcp) {
+        (void)impl_->core->http_data_client().AbortUpload(impl_->upload_id);
+      } else {
+        (void)impl_->core->metadata_client().AbortUpload(impl_->upload_id);
+      }
     }
   }
 }
@@ -64,8 +76,88 @@ void MultipartUpload::set_checksum_policy(std::string policy) {
   impl_->checksum_policy = std::move(policy);
 }
 
-// 上传单个 part：开 session → cuObj 推数据 → 记录 (part_number, etag)。
-// 每个 part 独立 OpenSession，offset 是对象内绝对偏移。
+namespace {
+
+// GDS 单 part 实现：现有行为不变。OpenSession 把 expected_size=0
+// 透传，gateway 不在 OnSessionOpened 里做整对象 Reserve。
+Result<TransferOutcome> UploadPartGds(ClientCore& core,
+                                       const ObjectId& object,
+                                       const std::string& checksum_policy,
+                                       const std::string& upload_id,
+                                       std::uint32_t part_number,
+                                       std::uint64_t object_offset,
+                                       ConstBufferView buffer) {
+  RequestOptions request;
+  request.object = object;
+  request.offset = object_offset;
+  // length 留空：cuObj 走 buffer.size（cuobject_client 内部 fallback），
+  // 让 expected_size=0 保留 GDS 原来的 Reserve 跳过行为。
+  request.checksum_policy = checksum_policy;
+
+  auto registration = core.gds_memory_registry().Register(
+      OperationType::kPut, buffer);
+  if (!registration.success()) {
+    return Result<TransferOutcome>::Failure(registration.error());
+  }
+  auto open_request = MakeSessionHandshake(core.options(), SessionPlan{
+      .operation = OperationType::kPut,
+      .request = request,
+      .buffer_type = buffer.type,
+      .path = DataPath::kGdsCuObject,
+  });
+  auto open_response =
+      core.metadata_client().OpenTransferSession(open_request);
+  if (!open_response.success()) {
+    return Result<TransferOutcome>::Failure(open_response.error());
+  }
+  auto session = ImportSession(open_response.value());
+
+  return core.cuobj_client().ExecutePutPart(
+      core.options(), core.gds_data_client(), session, request, buffer,
+      upload_id, part_number);
+}
+
+// RDMA 单 part 实现：走 RdmaTransferPath::PutObjectPart；
+// expected_size = part_size 让 BindSession 阶段能分配 buffer，
+// is_multipart_part=true 让 gateway 跳过整对象 Reserve。
+Result<TransferOutcome> UploadPartRdma(const ClientCore& core,
+                                        const ObjectId& object,
+                                        const std::string& checksum_policy,
+                                        const std::string& upload_id,
+                                        std::uint32_t part_number,
+                                        std::uint64_t object_offset,
+                                        ConstBufferView buffer) {
+  RequestOptions request;
+  request.object          = object;
+  request.offset          = object_offset;
+  request.length          = buffer.size;     // 让 expected_size>0
+  request.checksum_policy = checksum_policy;
+  return core.rdma_transfer_path().PutObjectPart(request, buffer, upload_id,
+                                                   part_number);
+}
+
+// HTTP 单 part 实现：与 RDMA 对偶，走 HttpTransferPath::PutObjectPart（内部 PUT
+// /v1/uploads/{upload_id}?partNumber=N）。HTTP 不走 control plane session，
+// expected_total_size 由 StartUpload 阶段一次性带过去即可。
+Result<TransferOutcome> UploadPartHttp(const ClientCore& core,
+                                        const ObjectId& object,
+                                        const std::string& checksum_policy,
+                                        const std::string& upload_id,
+                                        std::uint32_t part_number,
+                                        std::uint64_t object_offset,
+                                        ConstBufferView buffer) {
+  RequestOptions request;
+  request.object          = object;
+  request.offset          = object_offset;
+  request.length          = buffer.size;
+  request.checksum_policy = checksum_policy;
+  return core.http_transfer_path().PutObjectPart(request, buffer, upload_id,
+                                                   part_number);
+}
+
+}  // namespace
+
+// 上传单个 part：开 session → 走 path 对应数据面 → 记录 (part_number, etag)。
 Result<TransferOutcome> MultipartUpload::UploadPart(std::uint32_t part_number,
                                                     std::uint64_t object_offset,
                                                     ConstBufferView buffer) {
@@ -85,46 +177,33 @@ Result<TransferOutcome> MultipartUpload::UploadPart(std::uint32_t part_number,
         MakeInvalidArgument("part exceeds gateway max_part_size"));
   }
 
-  auto& core = *impl_->core;
-  RequestOptions request;
-  request.object = impl_->object;
-  request.offset = object_offset;
-  // request.length 留空：对 multipart part，expected_size 报 0 可避免 gateway
-  // 在 OnSessionOpened 里对最终对象做 Reserve（part 实际通过 WritePart 落盘）。
-  // cuObj 传输大小走 buffer.size（cuobject_client 内部 fallback），不依赖该字段。
+  std::string checksum_policy;
   {
     std::scoped_lock lock(impl_->mu);
-    request.checksum_policy = impl_->checksum_policy;
+    checksum_policy = impl_->checksum_policy;
   }
 
-  // 仅做 buffer 类型与非空校验。
-  auto registration = core.gds_memory_registry().Register(
-      OperationType::kPut, buffer);
-  if (!registration.success()) {
-    return Result<TransferOutcome>::Failure(registration.error());
-  }
-  auto open_request = MakeSessionHandshake(core.options(), SessionPlan{
-      .operation = OperationType::kPut,
-      .request = request,
-      .buffer_type = buffer.type,
-      .path = DataPath::kGdsCuObject,
-  });
-  auto open_response =
-      core.metadata_client().OpenTransferSession(open_request);
-  if (!open_response.success()) {
-    return Result<TransferOutcome>::Failure(open_response.error());
-  }
-  auto session = ImportSession(open_response.value());
-
-  auto outcome = core.cuobj_client().ExecutePutPart(
-      core.options(), core.gds_data_client(), session, request, buffer,
-      impl_->upload_id, part_number);
+  Result<TransferOutcome> outcome = [&]() {
+    switch (impl_->data_path) {
+      case DataPath::kNativeRdma:
+        return UploadPartRdma(*impl_->core, impl_->object, checksum_policy,
+                                impl_->upload_id, part_number, object_offset, buffer);
+      case DataPath::kHttpTcp:
+        return UploadPartHttp(*impl_->core, impl_->object, checksum_policy,
+                                impl_->upload_id, part_number, object_offset, buffer);
+      case DataPath::kGdsCuObject:
+      default:
+        return UploadPartGds(*impl_->core, impl_->object, checksum_policy,
+                              impl_->upload_id, part_number, object_offset, buffer);
+    }
+  }();
   if (!outcome.success()) {
     return outcome;
   }
+
   PartCompletion pc;
   pc.part_number = part_number;
-  pc.etag = outcome.value().etag;
+  pc.etag        = outcome.value().etag;
   {
     std::scoped_lock lock(impl_->mu);
     impl_->parts.push_back(std::move(pc));
@@ -214,20 +293,54 @@ Result<CompleteUploadResult> MultipartUpload::Complete() {
     }
     parts_copy = impl_->parts;
   }
-  auto out = impl_->core->metadata_client().CompleteUpload(impl_->upload_id,
-                                                            parts_copy);
+
+  // 按 data_path 分发：GDS / RDMA 走 control plane（baidu_std）；
+  // HTTP 走 HTTP /v1/uploads/{upload_id}/complete。
+  Result<CompleteUploadResult> result = [&]() -> Result<CompleteUploadResult> {
+    if (impl_->data_path == DataPath::kHttpTcp) {
+      std::vector<HttpDataClient::PartEtag> http_parts;
+      http_parts.reserve(parts_copy.size());
+      for (const auto& p : parts_copy) {
+        http_parts.push_back({p.part_number, p.etag});
+      }
+      auto out = impl_->core->http_data_client().CompleteUpload(
+          impl_->upload_id, http_parts);
+      if (!out.success()) {
+        return Result<CompleteUploadResult>::Failure(out.error());
+      }
+      CompleteUploadResult r;
+      r.etag           = out.value().etag;
+      r.version        = out.value().version;
+      r.content_length = out.value().content_length;
+      return Result<CompleteUploadResult>::Success(std::move(r));
+    }
+    auto out = impl_->core->metadata_client().CompleteUpload(impl_->upload_id,
+                                                              parts_copy);
+    if (!out.success()) {
+      return Result<CompleteUploadResult>::Failure(out.error());
+    }
+    CompleteUploadResult r;
+    r.etag           = out.value().etag;
+    r.version        = out.value().version;
+    r.content_length = out.value().content_length;
+    return Result<CompleteUploadResult>::Success(std::move(r));
+  }();
+
+  // Complete 成功 → finished=true，析构不再 abort。
+  // Complete 失败 → best-effort abort 释放 server 端 upload（与 ~MultipartUpload
+  // 走同一通道）；但仍把 finished 置 true，避免重复 abort 把用户错误覆盖掉。
+  if (!result.success()) {
+    if (impl_->data_path == DataPath::kHttpTcp) {
+      (void)impl_->core->http_data_client().AbortUpload(impl_->upload_id);
+    } else {
+      (void)impl_->core->metadata_client().AbortUpload(impl_->upload_id);
+    }
+  }
   {
     std::scoped_lock lock(impl_->mu);
     impl_->finished = true;
   }
-  if (!out.success()) {
-    return Result<CompleteUploadResult>::Failure(out.error());
-  }
-  CompleteUploadResult r;
-  r.etag = out.value().etag;
-  r.version = out.value().version;
-  r.content_length = out.value().content_length;
-  return Result<CompleteUploadResult>::Success(std::move(r));
+  return result;
 }
 
 Result<bool> MultipartUpload::Abort() {
@@ -237,7 +350,10 @@ Result<bool> MultipartUpload::Abort() {
       return Result<bool>::Success(true);
     }
   }
-  auto out = impl_->core->metadata_client().AbortUpload(impl_->upload_id);
+  Result<bool> out =
+      (impl_->data_path == DataPath::kHttpTcp)
+          ? impl_->core->http_data_client().AbortUpload(impl_->upload_id)
+          : impl_->core->metadata_client().AbortUpload(impl_->upload_id);
   {
     std::scoped_lock lock(impl_->mu);
     impl_->finished = true;
@@ -281,26 +397,89 @@ Result<TransferOutcome> Client::PutObject(const RequestOptions& request,
   return core_->transfer_router().PutObject(request, buffer);
 }
 
+namespace {
+
+template <typename T>
+std::future<Result<T>> MakeReadyFuture(Result<T> r) {
+  std::promise<Result<T>> p;
+  p.set_value(std::move(r));
+  return p.get_future();
+}
+
+}  // namespace
+
+std::future<Result<ObjectMetadata>> Client::HeadObjectAsync(
+    const ObjectId& object) const {
+  if (!core_->initialized()) {
+    return MakeReadyFuture(Result<ObjectMetadata>::Failure(
+        MakeNotInitialized("Client")));
+  }
+  return core_->async_executor().Submit(
+      [core = core_.get(), object]() -> Result<ObjectMetadata> {
+        return core->metadata_client().HeadObject(object);
+      });
+}
+
+std::future<Result<TransferOutcome>> Client::GetObjectAsync(
+    const RequestOptions& request, MutableBufferView buffer) const {
+  if (!core_->initialized()) {
+    return MakeReadyFuture(Result<TransferOutcome>::Failure(
+        MakeNotInitialized("Client")));
+  }
+  return core_->async_executor().Submit(
+      [core = core_.get(), request, buffer]() -> Result<TransferOutcome> {
+        return core->transfer_router().GetObject(request, buffer);
+      });
+}
+
+std::future<Result<TransferOutcome>> Client::PutObjectAsync(
+    const RequestOptions& request, ConstBufferView buffer) const {
+  if (!core_->initialized()) {
+    return MakeReadyFuture(Result<TransferOutcome>::Failure(
+        MakeNotInitialized("Client")));
+  }
+  return core_->async_executor().Submit(
+      [core = core_.get(), request, buffer]() -> Result<TransferOutcome> {
+        return core->transfer_router().PutObject(request, buffer);
+      });
+}
+
 Result<MultipartUpload> Client::StartUpload(const ObjectId& object,
                                             std::size_t expected_total_size,
                                             const std::string& idempotency_key) {
   if (!core_->initialized()) {
     return Result<MultipartUpload>::Failure(MakeNotInitialized("Client"));
   }
-  StartUploadOptions opts;
-  opts.object = object;
-  opts.expected_total_size = expected_total_size;
-  opts.data_path = DataPath::kGdsCuObject;
-  opts.idempotency_key = idempotency_key;
-  auto out = core_->metadata_client().StartUpload(opts);
-  if (!out.success()) {
-    return Result<MultipartUpload>::Failure(out.error());
-  }
+  const auto path = core_->options().data_path;
+
   auto impl = std::make_unique<MultipartUpload::Impl>();
-  impl->core = core_.get();
-  impl->object = object;
-  impl->upload_id = std::move(out.value().upload_id);
-  impl->max_part_size = out.value().max_part_size;
+  impl->core      = core_.get();
+  impl->object    = object;
+  impl->data_path = path;
+
+  if (path == DataPath::kHttpTcp) {
+    // HTTP 路径：StartUpload 直接走 HTTP /v1/uploads/{bucket}/{key}，
+    // 不走 control plane baidu_std。
+    auto out = core_->http_data_client().StartUpload(
+        object, static_cast<std::uint64_t>(expected_total_size), idempotency_key);
+    if (!out.success()) {
+      return Result<MultipartUpload>::Failure(out.error());
+    }
+    impl->upload_id     = std::move(out.value().upload_id);
+    impl->max_part_size = out.value().max_part_size;
+  } else {
+    StartUploadOptions opts;
+    opts.object              = object;
+    opts.expected_total_size = expected_total_size;
+    opts.data_path           = path;  // 仅 GDS / RDMA
+    opts.idempotency_key     = idempotency_key;
+    auto out = core_->metadata_client().StartUpload(opts);
+    if (!out.success()) {
+      return Result<MultipartUpload>::Failure(out.error());
+    }
+    impl->upload_id     = std::move(out.value().upload_id);
+    impl->max_part_size = out.value().max_part_size;
+  }
   return Result<MultipartUpload>::Success(MultipartUpload(std::move(impl)));
 }
 

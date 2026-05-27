@@ -17,6 +17,10 @@ namespace us3_turbo_access::gateway::core {
 class MetadataService;
 }  // namespace us3_turbo_access::gateway::core
 
+namespace us3_turbo_access::gateway::core::multipart {
+class MultipartCoordinator;
+}  // namespace us3_turbo_access::gateway::core::multipart
+
 namespace us3_turbo_access::gateway::data_path::http {
 class HttpExecutor;
 }  // namespace us3_turbo_access::gateway::data_path::http
@@ -39,6 +43,7 @@ class HttpFrontend final : public ::us3_turbo_access::gateway::GatewayHttpServic
  public:
   HttpFrontend(std::string gateway_id, core::MetadataService& metadata,
                data_path::http::HttpExecutor& http,
+               core::multipart::MultipartCoordinator& multipart,
                std::shared_ptr<spdlog::logger> logger);
 
   void default_method(google::protobuf::RpcController* cntl,
@@ -56,10 +61,21 @@ class HttpFrontend final : public ::us3_turbo_access::gateway::GatewayHttpServic
   void HandlePut(brpc::Controller* cntl, const std::string& bucket,
                  const std::string& key);
 
-  std::string                          gateway_id_;
-  core::MetadataService&               metadata_;
-  data_path::http::HttpExecutor&       http_;
-  std::shared_ptr<spdlog::logger>      logger_;
+  // V2 multipart 路由（/v1/uploads/...）
+  void HandleStartUpload(brpc::Controller* cntl, const std::string& bucket,
+                         const std::string& key);
+  void HandleUploadPart(brpc::Controller* cntl, const std::string& upload_id,
+                        std::uint32_t part_number);
+  void HandleCompleteUpload(brpc::Controller* cntl,
+                            const std::string& upload_id);
+  void HandleAbortUpload(brpc::Controller* cntl,
+                         const std::string& upload_id);
+
+  std::string                              gateway_id_;
+  core::MetadataService&                   metadata_;
+  data_path::http::HttpExecutor&           http_;
+  core::multipart::MultipartCoordinator&   multipart_;
+  std::shared_ptr<spdlog::logger>          logger_;
 };
 
 }  // namespace us3_turbo_access::gateway::api

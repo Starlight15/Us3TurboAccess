@@ -1,16 +1,19 @@
 add_executable(us3_turbo_access_gateway
   ${US3_TURBO_ACCESS_CONTROL_PROTO_SRCS}
   ${US3_TURBO_ACCESS_HTTP_PROTO_SRCS}
+  ${US3_TURBO_ACCESS_RDMA_PROTO_SRCS}
   src/app/main.cpp
   src/app/server.cpp
   src/api/control_plane_service.cpp
   src/api/http_frontend.cpp
+  src/api/rdma_data_plane_service.cpp
   src/backend/composite_backend.cpp
   src/backend/memory_data_store.cpp
   src/backend/memory_index_store.cpp
   src/backend/null_backend.cpp
   src/backend/null_data_store.cpp
   src/backend/null_index_store.cpp
+  src/common/crc32c.cpp
   src/common/error.cpp
   src/common/ids.cpp
   src/common/log.cpp
@@ -27,12 +30,19 @@ add_executable(us3_turbo_access_gateway
   src/data_path/gds/cuobj_resources.cpp
   src/data_path/gds/gds_executor.cpp
   src/data_path/http/http_executor.cpp
+  src/data_path/rdma/rdma_connection_registry.cpp
+  src/data_path/rdma/rdma_executor.cpp
+  src/data_path/rdma/rdma_listener.cpp
+  src/data_path/rdma/rdma_resources.cpp
+  src/data_path/rdma/rdma_session_registry.cpp
+  src/data_path/rdma/rdma_session_sweeper.cpp
   src/runtime/gateway_runtime.cpp
   src/runtime/io_worker_pool.cpp)
 
 add_dependencies(us3_turbo_access_gateway
   us3_turbo_access_control_plane_proto
-  us3_turbo_access_http_gateway_proto)
+  us3_turbo_access_http_gateway_proto
+  us3_turbo_access_rdma_data_plane_proto)
 
 target_include_directories(us3_turbo_access_gateway
   PRIVATE

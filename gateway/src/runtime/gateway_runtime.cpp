@@ -7,6 +7,7 @@
 
 #include "api/control_plane_service.h"
 #include "api/http_frontend.h"
+#include "api/rdma_data_plane_service.h"
 #include "backend/composite_backend.h"
 #include "backend/memory_data_store.h"
 #include "backend/memory_index_store.h"
@@ -20,6 +21,7 @@
 #include "core/session/session_store.h"
 #include "core/session/session_sweeper.h"
 #include "data_path/gds/gds_executor.h"
+#include "data_path/rdma/rdma_executor.h"
 #include "runtime/io_worker_pool.h"
 #include "data_path/http/http_executor.h"
 #include "common/error.h"
@@ -67,16 +69,6 @@ Result<bool> GatewayRuntime::Initialize() {
   logger_ = common::EnsureLogger(options_.logger);
   options_.logger = logger_;
 
-  // M1 阶段不支持 native-RDMA。
-  if (options_.rdma_enable) {
-    return Result<bool>::Failure(common::MakeError(
-        ErrorCode::kRdmaUnavailable,
-        "native-rdma data path not enabled in M1; restart with --rdma_enable=false"));
-  }
-
-  if (options_.gds_rdma_port == 0) {
-    options_.gds_rdma_port = options_.rdma_port + 1;
-  }
 
   // backend 是所有上层模块的依赖根。
   backend_ = MakeBackend(options_);
@@ -88,7 +80,8 @@ Result<bool> GatewayRuntime::Initialize() {
   multipart_coordinator_ = std::make_unique<core::multipart::MultipartCoordinator>(
       *backend_, *multipart_store_, options_.multipart_max_part_size,
       options_.multipart_min_part_size, logger_);
-  http_executor_ = std::make_unique<data_path::http::HttpExecutor>(*backend_, logger_);
+  http_executor_ = std::make_unique<data_path::http::HttpExecutor>(
+      *backend_, multipart_coordinator_.get(), logger_);
   io_pool_ = std::make_unique<runtime::IoWorkerPool>(
       static_cast<std::size_t>(std::max(1, options_.io_worker_threads)));
 
@@ -97,9 +90,22 @@ Result<bool> GatewayRuntime::Initialize() {
     const std::string gds_bind =
         options_.bind_host == "0.0.0.0" ? options_.public_host : options_.bind_host;
     gds_executor_ = std::make_unique<data_path::gds::GdsExecutor>(
-        options_.public_host, gds_bind, options_.gds_rdma_port, *backend_,
-        *metadata_, logger_);
+        options_.public_host, gds_bind, options_.gds, *backend_, *metadata_,
+        logger_);
     auto started = gds_executor_->Start();
+    if (!started.success()) {
+      return Result<bool>::Failure(started.error());
+    }
+  }
+
+  // Native RDMA 数据通路（与 GDS 完全独立）。
+  if (options_.rdma_enable) {
+    const std::string rdma_bind =
+        options_.bind_host == "0.0.0.0" ? options_.public_host : options_.bind_host;
+    rdma_executor_ = std::make_unique<data_path::rdma::RdmaExecutor>(
+        options_.public_host, rdma_bind, options_.rdma, *backend_, *metadata_,
+        multipart_coordinator_.get(), io_pool_.get(), logger_);
+    auto started = rdma_executor_->Start();
     if (!started.success()) {
       return Result<bool>::Failure(started.error());
     }
@@ -108,13 +114,14 @@ Result<bool> GatewayRuntime::Initialize() {
   // SessionOpener 仅协调 SessionStore 与各 executor，不直接持 backend。
   session_opener_ = std::make_unique<core::SessionOpener>(
       *sessions_, http_executor_.get(), gds_executor_.get(),
-      /*rdma_executor=*/nullptr, logger_);
+      rdma_executor_.get(), logger_);
 
   control_plane_ = std::make_unique<api::ControlPlaneService>(
       *sessions_, *metadata_, *session_opener_, gds_executor_.get(),
       *multipart_coordinator_, *io_pool_, logger_);
   http_frontend_ = std::make_unique<api::HttpFrontend>(
-      options_.gateway_id, *metadata_, *http_executor_, logger_);
+      options_.gateway_id, *metadata_, *http_executor_,
+      *multipart_coordinator_, logger_);
 
   brpc::ServerOptions server_options;
   server_options.idle_timeout_sec = options_.idle_timeout_sec;
@@ -125,6 +132,17 @@ Result<bool> GatewayRuntime::Initialize() {
                          brpc::SERVER_DOESNT_OWN_SERVICE) != 0) {
     return Result<bool>::Failure(common::MakeError(
         ErrorCode::kInternal, "failed to register control-plane service"));
+  }
+
+  // Native RDMA 数据面 service 仅在 rdma_enable=true 时注册。
+  if (rdma_executor_ != nullptr) {
+    rdma_data_plane_ = std::make_unique<api::RdmaDataPlaneService>(
+        *rdma_executor_, logger_);
+    if (server_.AddService(rdma_data_plane_.get(),
+                            brpc::SERVER_DOESNT_OWN_SERVICE) != 0) {
+      return Result<bool>::Failure(common::MakeError(
+          ErrorCode::kInternal, "failed to register rdma-data-plane service"));
+    }
   }
 
   const std::string bind_endpoint =
@@ -173,12 +191,17 @@ void GatewayRuntime::Shutdown() {
   }
   session_sweeper_.reset();
   control_plane_.reset();
+  rdma_data_plane_.reset();
   http_frontend_.reset();  // typically already released to brpc; safe no-op.
   session_opener_.reset();
   if (gds_executor_ != nullptr) {
     gds_executor_->Stop();
   }
   gds_executor_.reset();
+  if (rdma_executor_ != nullptr) {
+    rdma_executor_->Stop();
+  }
+  rdma_executor_.reset();
   io_pool_.reset();
   http_executor_.reset();
   multipart_coordinator_.reset();

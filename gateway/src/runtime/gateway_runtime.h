@@ -31,6 +31,10 @@ namespace us3_turbo_access::gateway::data_path::gds {
 class GdsExecutor;
 }  // namespace us3_turbo_access::gateway::data_path::gds
 
+namespace us3_turbo_access::gateway::data_path::rdma {
+class RdmaExecutor;
+}  // namespace us3_turbo_access::gateway::data_path::rdma
+
 namespace us3_turbo_access::gateway::data_path::http {
 class HttpExecutor;
 }  // namespace us3_turbo_access::gateway::data_path::http
@@ -42,6 +46,7 @@ class IoWorkerPool;
 namespace us3_turbo_access::gateway::api {
 class ControlPlaneService;
 class HttpFrontend;
+class RdmaDataPlaneService;
 }  // namespace us3_turbo_access::gateway::api
 
 namespace us3_turbo_access::gateway::runtime {
@@ -85,7 +90,9 @@ class GatewayRuntime {
   std::unique_ptr<data_path::http::HttpExecutor>       http_executor_;
   std::unique_ptr<core::SessionOpener>                 session_opener_;
   std::unique_ptr<data_path::gds::GdsExecutor>         gds_executor_;
+  std::unique_ptr<data_path::rdma::RdmaExecutor>       rdma_executor_;
   std::unique_ptr<api::ControlPlaneService>            control_plane_;
+  std::unique_ptr<api::RdmaDataPlaneService>           rdma_data_plane_;
   std::unique_ptr<api::HttpFrontend>                   http_frontend_;
   brpc::Server                                         server_;
   bool                                                 started_{false};

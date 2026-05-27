@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <future>
 #include <memory>
 #include <string>
 #include <vector>
@@ -93,6 +94,19 @@ class Client {
                                                   MutableBufferView buffer) const;
   [[nodiscard]] Result<TransferOutcome> PutObject(const RequestOptions& request,
                                                   ConstBufferView buffer) const;
+
+  /*
+   * 异步版本：把同步实现 Submit 到客户端共享线程池，立即返回 future。
+   * 调用方必须保证 buffer 在 future 完成前保持有效（视图传值，但底层指针仍是用户的）。
+   * 阶段 A 仅是 sync→future 封装，QP 资源仍按调用现场建/拆；C5 切到 CQ 完成
+   * 线程后，本组接口保持不变。
+   */
+  [[nodiscard]] std::future<Result<ObjectMetadata>>
+    HeadObjectAsync(const ObjectId& object) const;
+  [[nodiscard]] std::future<Result<TransferOutcome>>
+    GetObjectAsync(const RequestOptions& request, MutableBufferView buffer) const;
+  [[nodiscard]] std::future<Result<TransferOutcome>>
+    PutObjectAsync(const RequestOptions& request, ConstBufferView buffer) const;
 
   [[nodiscard]] Result<MultipartUpload>
     StartUpload(const ObjectId& object, std::size_t expected_total_size = 0,

@@ -8,6 +8,8 @@ std::string_view ToString(DataPath path) {
       return "gds-cuobject";
     case DataPath::kNativeRdma:
       return "native-rdma";
+    case DataPath::kHttpTcp:
+      return "http-tcp";
   }
   return "unknown";
 }

@@ -23,9 +23,6 @@ namespace us3_turbo_access::gateway::data_path::gds {
 
 namespace {
 
-constexpr std::size_t kMaxCuObjTransferBytes =
-    1ULL * 1024ULL * 1024ULL * 1024ULL;  // cuObjServer 1 GiB hard limit
-
 [[nodiscard]] Error MakeGdsError(ErrorCode code, std::string message,
                                  bool retryable = true) {
   Error err;
@@ -75,12 +72,12 @@ constexpr std::size_t kMaxCuObjTransferBytes =
 }  // namespace
 
 GdsExecutor::GdsExecutor(std::string public_host, std::string bind_host,
-                         int port, backend::IBackend& backend,
+                         const GdsOptions& opts, backend::IBackend& backend,
                          core::MetadataService& metadata,
                          std::shared_ptr<spdlog::logger> logger)
     : public_host_(std::move(public_host)),
       bind_host_(std::move(bind_host)),
-      port_(port),
+      opts_(opts),
       backend_(backend),
       metadata_(metadata),
       logger_(std::move(logger)) {}
@@ -88,7 +85,7 @@ GdsExecutor::GdsExecutor(std::string public_host, std::string bind_host,
 GdsExecutor::~GdsExecutor() { Stop(); }
 
 std::string GdsExecutor::endpoint() const {
-  return public_host_ + ":" + std::to_string(port_);
+  return public_host_ + ":" + std::to_string(opts_.rdma_port);
 }
 
 // 起 cuObjServer + PinnedBufferPool；pool 析构需 server 存活，见 Stop()。
@@ -98,27 +95,21 @@ Result<bool> GdsExecutor::Start() {
     return Result<bool>::Success(true);
   }
   auto server = std::make_shared<cuObjServer>(
-      bind_host_.c_str(), static_cast<unsigned short>(port_),
+      bind_host_.c_str(), static_cast<unsigned short>(opts_.rdma_port),
       CUOBJ_PROTO_RDMA_DC_V1);
   if (!server->isConnected()) {
     return Result<bool>::Failure(MakeGdsError(
         ErrorCode::kRdmaUnavailable,
         "cuObjServer init failed on " + bind_host_ + ":" +
-            std::to_string(port_)));
+            std::to_string(opts_.rdma_port)));
   }
   server_ = std::move(server);
-  // size class {1M, 16M, 256M, 1G}；每档最多缓存 4 块；超过 1 GiB 走 oversize 旁路。
+  // size class 与 max_per_class 取自 GdsOptions，便于按硬件 / 负载独立调优。
   buffer_pool_ = std::make_shared<PinnedBufferPool>(
-      *server_,
-      std::vector<std::size_t>{
-          1ULL * 1024ULL * 1024ULL,           // 1 MiB
-          16ULL * 1024ULL * 1024ULL,          // 16 MiB
-          256ULL * 1024ULL * 1024ULL,         // 256 MiB
-          1ULL * 1024ULL * 1024ULL * 1024ULL  // 1 GiB
-      },
-      /*max_per_class=*/4);
+      *server_, opts_.buffer_size_classes, opts_.buffer_max_per_class);
   if (logger_ != nullptr) {
-    logger_->info("gds: cuObjServer listening on {}:{}", bind_host_, port_);
+    logger_->info("gds: cuObjServer listening on {}:{}", bind_host_,
+                  opts_.rdma_port);
   }
   return Result<bool>::Success(true);
 }
@@ -177,7 +168,7 @@ Result<std::string> GdsExecutor::GetChunk(const core::Session& session,
                                           const std::string& rdma_token,
                                           std::uint64_t object_offset,
                                           std::uint64_t length) {
-  if (length > kMaxCuObjTransferBytes) {
+  if (length > opts_.max_chunk_bytes) {
     return Result<std::string>::Failure(MakeGdsError(
         ErrorCode::kBadRequest,
         "GDS GET chunk exceeds 1 GiB cuObjServer limit", false));
@@ -256,7 +247,7 @@ Result<ObjectMetadata> GdsExecutor::PutChunk(const core::Session& session,
                                              const std::string& rdma_token,
                                              std::uint64_t object_offset,
                                              std::uint64_t length) {
-  if (length > kMaxCuObjTransferBytes) {
+  if (length > opts_.max_chunk_bytes) {
     return Result<ObjectMetadata>::Failure(MakeGdsError(
         ErrorCode::kBadRequest,
         "GDS PUT chunk exceeds 1 GiB cuObjServer limit", false));
@@ -337,7 +328,7 @@ Result<std::string> GdsExecutor::PutPart(const core::Session& session,
                                          std::uint64_t object_offset,
                                          std::uint64_t length,
                                          std::string_view checksum_policy) {
-  if (length > kMaxCuObjTransferBytes) {
+  if (length > opts_.max_chunk_bytes) {
     return Result<std::string>::Failure(MakeGdsError(
         ErrorCode::kBadRequest,
         "GDS PUT part exceeds 1 GiB cuObjServer limit", false));

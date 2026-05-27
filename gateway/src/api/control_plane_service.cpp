@@ -64,6 +64,7 @@ void FillGdsResponse(const std::string& gateway_id,
   req.offset = request.offset();
   req.expected_size = request.expected_size();
   req.idempotency_key = request.idempotency_key();
+  req.is_multipart_part = request.is_multipart_part();
   return req;
 }
 

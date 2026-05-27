@@ -56,6 +56,7 @@ Result<std::shared_ptr<Session>> SessionStore::Create(const OpenSessionParams& r
   session->offset = req.offset;
   session->expected_size = req.expected_size;
   session->idempotency_key = req.idempotency_key;
+  session->is_multipart_part = req.is_multipart_part;
   session->state.store(SessionState::kOpened, std::memory_order_release);
   session->expire_deadline =
       std::chrono::steady_clock::now() + session_ttl_;

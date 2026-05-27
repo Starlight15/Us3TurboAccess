@@ -50,6 +50,7 @@ MetadataClient::OpenTransferSession(const SessionOpening& request) const {
   rpc_request.set_offset(request.offset);
   rpc_request.set_expected_size(request.length.value_or(0));
   rpc_request.set_idempotency_key(request.idempotency_key);
+  rpc_request.set_is_multipart_part(request.is_multipart_part);
 
   us3_turbo_access::gateway::OpenSessionResponse rpc_response;
   stub_->OpenSession(&controller, &rpc_request, &rpc_response, nullptr);

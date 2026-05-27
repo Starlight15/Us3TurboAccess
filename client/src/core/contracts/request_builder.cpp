@@ -45,6 +45,7 @@ SessionOpening MakeSessionHandshake(const ClientOptions& options,
       .request_id = MakeId(kRequestIdPrefix),
       .session_id = MakeId(kSessionIdPrefix),
       .idempotency_key = input.request.idempotency_key,
+      .is_multipart_part = input.is_multipart_part,
   };
 }
 

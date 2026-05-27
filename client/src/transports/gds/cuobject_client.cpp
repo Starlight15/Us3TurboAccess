@@ -3,15 +3,18 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <new>
 #include <optional>
 #include <string>
 #include <thread>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 
 #include <cufile.h>
@@ -80,6 +83,92 @@ struct CuObjCallbackContext {
   TransferOutcome outcome;
   std::optional<Error> callback_err;
 };
+
+/* ===== PoC: cuObj client / descriptor reuse probe =====
+ * US3_GDS_POC_MODE env var (default 0 = unchanged original path):
+ *   0 = global lock + per-call client + per-call descriptor (current production)
+ *   1 = global lock + per-call client + cross-client cached descriptor
+ *       (tests Q2: descriptor table truly process-wide?)
+ *   2 = global lock + singleton client + cached descriptor on that client
+ *   3 = no lock     + singleton client + cached descriptor
+ *       (tests Q3: single client thread-safe under concurrent cuObjPut?)
+ *   4 = no lock     + thread_local client + per-thread cached descriptor
+ *       (tests Q4: N independent clients beat shared client?)
+ * Descriptor never released for the lifetime of the cache; PoC only — no LRU. */
+int GetPocMode() {
+  static int m = []() {
+    const char* e = std::getenv("US3_GDS_POC_MODE");
+    return (e != nullptr && *e != '\0') ? std::atoi(e) : 0;
+  }();
+  return m;
+}
+
+// Forward decls of the cuObj callbacks used by ops table.
+ssize_t CuObjGetCallback(const void*, char*, size_t, loff_t, const cufileRDMAInfo_t*);
+ssize_t CuObjPutCallback(const void*, const char*, size_t, loff_t, const cufileRDMAInfo_t*);
+
+// Long-lived cuObj client: owns its own ops table so the SDK reference stays
+// valid for the lifetime of the client (PoC modes 2-4 keep clients alive).
+class LongLivedCuObjClient {
+ public:
+  explicit LongLivedCuObjClient(const CuObjApi& api) {
+    ops_.get = &CuObjGetCallback;
+    ops_.put = &CuObjPutCallback;
+    handle_ = std::make_unique<CuObjClientHandle>(api, ops_);
+  }
+  [[nodiscard]] void* raw() { return handle_->raw(); }
+
+ private:
+  CUObjOps_t ops_{};
+  std::unique_ptr<CuObjClientHandle> handle_;
+};
+
+// Mode 1: process-wide cross-client descriptor set.
+std::mutex                g_xclient_reg_mu;
+std::unordered_set<void*> g_xclient_registered;
+
+// Modes 2/3: singleton client + its descriptor set.
+std::mutex                          g_shared_init_mu;
+std::unique_ptr<LongLivedCuObjClient> g_shared_client;
+std::mutex                          g_shared_reg_mu;
+std::unordered_set<void*>           g_shared_registered;
+
+LongLivedCuObjClient& GetSharedClient(const CuObjApi& api) {
+  std::scoped_lock lk(g_shared_init_mu);
+  if (!g_shared_client) {
+    g_shared_client = std::make_unique<LongLivedCuObjClient>(api);
+  }
+  return *g_shared_client;
+}
+
+// Mode 4: thread-local client + per-thread descriptor set.
+struct ThreadLocalState {
+  std::unique_ptr<LongLivedCuObjClient> client;
+  std::unordered_set<void*>             registered;
+};
+ThreadLocalState& GetTlState(const CuObjApi& api) {
+  thread_local ThreadLocalState s;
+  if (!s.client) {
+    s.client = std::make_unique<LongLivedCuObjClient>(api);
+  }
+  return s;
+}
+
+/* Ensure descriptor for `ptr` is registered; hold the lock through the SDK
+ * register call so first-time concurrent callers serialize on this single
+ * register, not race past the lookup. After the first successful register
+ * subsequent callers short-circuit on the set lookup. */
+[[nodiscard]] cuObjErr_t EnsureRegistered(const CuObjApi& api, void* client_raw,
+                                          void* ptr, std::size_t size,
+                                          std::mutex& mu,
+                                          std::unordered_set<void*>& seen) {
+  std::scoped_lock lk(mu);
+  if (seen.find(ptr) != seen.end()) return CU_OBJ_SUCCESS;
+  const auto rc = api.get_descriptor(client_raw, ptr, size);
+  if (rc == CU_OBJ_SUCCESS) seen.insert(ptr);
+  return rc;
+}
+/* ===== /PoC ===== */
 
 [[nodiscard]] Error MakeCuObjError(const std::string& request_id, const std::string& message,
                                    bool retryable) {
@@ -183,27 +272,62 @@ template <typename BufferPointer>
     ops.get = &CuObjGetCallback;
     ops.put = &CuObjPutCallback;
 
-    /* 3. 进程级串行化 cuObj 调用。
-     *    cuObjClient SDK 内部 descriptor 表是 process-wide 共享，
-     *    并发调用会让 cuMemObjGetDescriptor 失败。 */
+    /* 3-5. 客户端获取 + descriptor 注册：按 US3_GDS_POC_MODE 切换实现。
+     *      mode 0 保留原行为；mode 1-4 是 PoC 路径，descriptor 缓存不释放。 */
     static std::mutex g_cuobj_global_mu;
-    std::scoped_lock<std::mutex> cuobj_lock(g_cuobj_global_mu);
+    const int poc_mode = GetPocMode();
+    std::optional<std::scoped_lock<std::mutex>> global_lock_holder;
+    std::optional<CuObjClientHandle> per_call_client;
+    std::optional<CuObjDescriptorGuard> per_call_desc_guard;
+    void* client_raw = nullptr;
 
-    // 4. 构造 cuObjClient 实例并校验 RDMA 连通性
-    CuObjClientHandle client(api, ops);
-    if (!api.is_connected(client.raw())) {
-      return Result<TransferOutcome>::Failure(
-          MakeCuObjError(session.meta.request_id,
-                         "cuObjClient 未连接到可用的 RDMA 服务", true));
-    }
-
-    // 5. 注册 GPU buffer 到 cuObj descriptor 表；RAII 守卫保证释放
-    if (api.get_descriptor(client.raw(), mutable_buffer, buffer_size) != CU_OBJ_SUCCESS) {
+    auto fail_register = [&]() {
       return Result<TransferOutcome>::Failure(
           MakeCuObjError(session.meta.request_id,
                          "cuMemObjGetDescriptor 注册失败", true));
+    };
+    auto fail_connect = [&]() {
+      return Result<TransferOutcome>::Failure(
+          MakeCuObjError(session.meta.request_id,
+                         "cuObjClient 未连接到可用的 RDMA 服务", true));
+    };
+
+    if (poc_mode == 0) {
+      global_lock_holder.emplace(g_cuobj_global_mu);
+      per_call_client.emplace(api, ops);
+      client_raw = per_call_client->raw();
+      if (!api.is_connected(client_raw)) return fail_connect();
+      if (api.get_descriptor(client_raw, mutable_buffer, buffer_size) != CU_OBJ_SUCCESS)
+        return fail_register();
+      per_call_desc_guard.emplace(api, client_raw, mutable_buffer);
+    } else if (poc_mode == 1) {
+      global_lock_holder.emplace(g_cuobj_global_mu);
+      per_call_client.emplace(api, ops);
+      client_raw = per_call_client->raw();
+      if (!api.is_connected(client_raw)) return fail_connect();
+      if (EnsureRegistered(api, client_raw, mutable_buffer, buffer_size,
+                            g_xclient_reg_mu, g_xclient_registered) != CU_OBJ_SUCCESS)
+        return fail_register();
+      // no guard: descriptor lives for process lifetime (PoC)
+    } else if (poc_mode == 2 || poc_mode == 3) {
+      if (poc_mode == 2) global_lock_holder.emplace(g_cuobj_global_mu);
+      auto& shared = GetSharedClient(api);
+      client_raw = shared.raw();
+      if (!api.is_connected(client_raw)) return fail_connect();
+      if (EnsureRegistered(api, client_raw, mutable_buffer, buffer_size,
+                            g_shared_reg_mu, g_shared_registered) != CU_OBJ_SUCCESS)
+        return fail_register();
+    } else /* poc_mode == 4 */ {
+      auto& tl = GetTlState(api);
+      client_raw = tl.client->raw();
+      if (!api.is_connected(client_raw)) return fail_connect();
+      /* Descriptor table is process-wide (verified by mode 1). Reuse the
+       * cross-client set so different per-thread clients don't double-register
+       * the same ptr. */
+      if (EnsureRegistered(api, client_raw, mutable_buffer, buffer_size,
+                            g_xclient_reg_mu, g_xclient_registered) != CU_OBJ_SUCCESS)
+        return fail_register();
     }
-    CuObjDescriptorGuard descriptor_guard(api, client.raw(), mutable_buffer);
 
     /* 6. 装配 ChunkDispatcher：每次 cuObj chunk 回调对应一条 RPC。
      *    upload_id 非空时切到 multipart 模式：chunk_offset 按 part 内偏移上报，
@@ -234,8 +358,8 @@ template <typename BufferPointer>
 
     // 9. 同步驱动 cuObj 传输；返回前 dispatcher 已经把所有 chunk RPC 发完
     const ssize_t result = op == OperationType::kGet
-                               ? api.cuobj_get(client.raw(), &context, mutable_buffer, req_bytes, 0, 0)
-                               : api.cuobj_put(client.raw(), &context, mutable_buffer, req_bytes, 0, 0);
+                               ? api.cuobj_get(client_raw, &context, mutable_buffer, req_bytes, 0, 0)
+                               : api.cuobj_put(client_raw, &context, mutable_buffer, req_bytes, 0, 0);
 
     /* 10. 错误判定：callback 内部失败优先（带 RPC 层错误信息），
      *     其次才看 cuObj 自身返回码。 */

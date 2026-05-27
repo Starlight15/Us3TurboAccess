@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -16,14 +17,21 @@ namespace brpc {
 class Controller;
 }  // namespace brpc
 
+namespace us3_turbo_access::gateway::core::multipart {
+class MultipartCoordinator;
+}  // namespace us3_turbo_access::gateway::core::multipart
+
 namespace us3_turbo_access::gateway::data_path::http {
 
 /**
  * @brief Outcome description recorded for a single transfer.
+ *   crc32c：server 端算出来的 CRC32C（成功路径）。Get 路径暂不填。
  */
 struct TransferReport {
   std::uint64_t  bytes_transferred{0};
   ObjectMetadata meta;
+  std::uint32_t  crc32c{0};
+  bool           has_crc32c{false};
 };
 
 /**
@@ -43,6 +51,7 @@ struct HttpResponseSink {
 class HttpExecutor final : public IDataPathExecutor {
  public:
   HttpExecutor(backend::IBackend& backend,
+               core::multipart::MultipartCoordinator* multipart,
                std::shared_ptr<spdlog::logger> logger);
 
   HttpExecutor(const HttpExecutor&) = delete;
@@ -64,12 +73,29 @@ class HttpExecutor final : public IDataPathExecutor {
     Get(std::string_view bucket, std::string_view key, std::uint64_t offset,
         std::uint64_t length, HttpResponseSink sink);
 
+  /**
+   * 整对象 PUT。expected_crc32c 非空时 server 端做 end-to-end 校验：
+   * 不一致返回 kInvalidArgument，不落盘。
+   * 返回的 TransferReport.crc32c 是 server 实际算出来的值，可作响应头回 client。
+   */
   [[nodiscard]] Result<TransferReport>
     Put(std::string_view bucket, std::string_view key,
-        std::span<const std::byte> body);
+        std::span<const std::byte> body,
+        std::optional<std::uint32_t> expected_crc32c);
+
+  /**
+   * Multipart 单 part PUT：写到 backend.WritePart，写完登记 part 进度
+   * 给 MultipartCoordinator（与 GDS/RDMA 路径对称）。expected_crc32c 同 Put。
+   * 返回 part_etag（被 client 收集后传给 CompleteUpload）。
+   */
+  [[nodiscard]] Result<TransferReport>
+    PutPart(std::string_view upload_id, std::uint32_t part_number,
+            std::span<const std::byte> body,
+            std::optional<std::uint32_t> expected_crc32c);
 
  private:
   backend::IBackend&              backend_;
+  core::multipart::MultipartCoordinator* multipart_{nullptr};
   std::shared_ptr<spdlog::logger> logger_;
 };
 

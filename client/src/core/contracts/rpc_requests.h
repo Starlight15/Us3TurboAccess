@@ -37,6 +37,7 @@ struct SessionOpening {
   std::string request_id;
   std::string session_id;
   std::string idempotency_key;
+  bool is_multipart_part{false};
 };
 
 /**

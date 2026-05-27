@@ -1,5 +1,7 @@
 add_library(us3_turbo_access_client
   ${US3_TURBO_ACCESS_CONTROL_PROTO_SRCS}
+  ${US3_TURBO_ACCESS_RDMA_PROTO_SRCS}
+  src/core/async/client_executor.cpp
   src/core/client/client.cpp
   src/core/client/client_core.cpp
   src/core/client/capability_probe.cpp
@@ -10,13 +12,27 @@ add_library(us3_turbo_access_client
   src/core/routing/transfer_router.cpp
   src/core/gds/gds_transfer_path.cpp
   src/core/rdma/rdma_transfer_path.cpp
+  src/core/http/http_transfer_path.cpp
   src/control/metadata_client.cpp
   src/data/gds_data_client.cpp
+  src/data/rdma_data_plane_client.cpp
+  src/data/http_data_client.cpp
+  src/data/http_crc32c.cpp
   src/transports/gds/gds_memory_registry.cpp
   src/transports/gds/cuobj_library.cpp
   src/transports/gds/chunk_dispatcher.cpp
-  src/transports/gds/cuobject_client.cpp)
-add_dependencies(us3_turbo_access_client us3_turbo_access_control_plane_proto)
+  src/transports/gds/cuobject_client.cpp
+  src/transports/rdma/host_memory_registry.cpp
+  src/transports/rdma/pinned_buffer.cpp
+  src/transports/rdma/rdma_cm_connection.cpp
+  src/transports/rdma/rdma_completion_driver.cpp
+  src/transports/rdma/rdma_connection_pool.cpp
+  src/transports/rdma/rdma_resources.cpp
+  src/transports/rdma/rdma_transfer_engine.cpp
+  src/transports/http/http_channel.cpp)
+add_dependencies(us3_turbo_access_client
+  us3_turbo_access_control_plane_proto
+  us3_turbo_access_rdma_data_plane_proto)
 
 add_library(Us3TurboAccess::client ALIAS us3_turbo_access_client)
 

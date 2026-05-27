@@ -18,6 +18,7 @@
 
 #include "common/range.h"
 #include "core/metadata/metadata_service.h"
+#include "core/multipart/multipart_coordinator.h"
 #include "data_path/http/http_executor.h"
 #include "common/error.h"
 
@@ -25,8 +26,10 @@ namespace us3_turbo_access::gateway::api {
 
 namespace {
 
-constexpr std::string_view kV1Prefix = "/v1/objects/";
-constexpr std::string_view kV0Prefix = "/objects/";
+constexpr std::string_view kV1Prefix      = "/v1/objects/";
+constexpr std::string_view kV0Prefix      = "/objects/";
+constexpr std::string_view kUploadsPrefix = "/v1/uploads/";
+constexpr std::string_view kCompleteSuffix = "/complete";
 
 std::string_view StripPrefix(std::string_view value, std::string_view prefix) {
   if (value.substr(0, prefix.size()) == prefix) {
@@ -52,6 +55,109 @@ bool ParseObjectPath(std::string_view path, std::string* bucket,
   *bucket = std::string(path.substr(0, slash));
   *key = std::string(path.substr(slash + 1U));
   return true;
+}
+
+// /v1/uploads/{bucket}/{key:*}   — POST 创建 upload
+bool ParseUploadInitPath(std::string_view path, std::string* bucket,
+                         std::string* key) {
+  if (!path.starts_with(kUploadsPrefix)) return false;
+  path.remove_prefix(kUploadsPrefix.size());
+  const auto slash = path.find('/');
+  if (slash == std::string_view::npos || slash == 0U ||
+      slash + 1U >= path.size()) {
+    return false;
+  }
+  *bucket = std::string(path.substr(0, slash));
+  *key = std::string(path.substr(slash + 1U));
+  return true;
+}
+
+// /v1/uploads/{upload_id}              — PUT (part) / DELETE (abort)
+// /v1/uploads/{upload_id}/complete     — POST (complete)
+// 第一段（去前缀后）就是 upload_id，没有 '/'（上层产生的 mpu-xx-xxxxxxx 形态）。
+// upload_id 不可能含 '/'，所以 bucket/key 路径与 upload_id 路径用是否含 '/' 区分。
+bool ParseUploadIdPath(std::string_view path, std::string* upload_id,
+                       bool* has_complete_suffix) {
+  if (!path.starts_with(kUploadsPrefix)) return false;
+  path.remove_prefix(kUploadsPrefix.size());
+  *has_complete_suffix = false;
+  if (path.ends_with(kCompleteSuffix)) {
+    *has_complete_suffix = true;
+    path.remove_suffix(kCompleteSuffix.size());
+  }
+  if (path.empty() || path.find('/') != std::string_view::npos) {
+    // 不是单段 upload_id（含 '/' 说明是 InitPath 的 bucket/key 形态）
+    return false;
+  }
+  *upload_id = std::string(path);
+  return true;
+}
+
+// 从 query 取 partNumber；返回 0 表示缺/非法。
+std::uint32_t ParsePartNumber(const brpc::Controller* cntl) {
+  const std::string* q = cntl->http_request().uri().GetQuery("partNumber");
+  if (q == nullptr || q->empty()) return 0;
+  try {
+    long v = std::stol(*q);
+    if (v < 0 || v > 0xFFFFFFFFL) return 0;
+    return static_cast<std::uint32_t>(v);
+  } catch (...) { return 0; }
+}
+
+// x-amz-checksum-crc32c 头（S3 兼容：base64 of big-endian uint32）。
+std::optional<std::uint32_t> ParseCrc32cHeader(const brpc::Controller* cntl) {
+  const auto* h = cntl->http_request().GetHeader("x-amz-checksum-crc32c");
+  if (h == nullptr || h->empty()) return std::nullopt;
+  // base64 解码（不依赖外部库；只接受标准 alphabet + '=' padding）。
+  auto idx_of = [](char c) -> int {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+  };
+  std::vector<std::uint8_t> out;
+  std::uint32_t buf = 0;
+  int bits = 0;
+  for (char c : *h) {
+    if (c == '=') break;
+    int v = idx_of(c);
+    if (v < 0) return std::nullopt;
+    buf = (buf << 6) | static_cast<std::uint32_t>(v);
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out.push_back(static_cast<std::uint8_t>((buf >> bits) & 0xFFu));
+    }
+  }
+  if (out.size() < 4) return std::nullopt;
+  return (static_cast<std::uint32_t>(out[0]) << 24) |
+         (static_cast<std::uint32_t>(out[1]) << 16) |
+         (static_cast<std::uint32_t>(out[2]) << 8) |
+         static_cast<std::uint32_t>(out[3]);
+}
+
+// 把 server 算出的 CRC32C 按 S3 约定 base64(big-endian u32) 写回响应头。
+std::string EncodeCrc32cBase64(std::uint32_t crc) {
+  static constexpr char kAlphabet[] =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  const std::uint8_t b[4] = {
+      static_cast<std::uint8_t>((crc >> 24) & 0xFF),
+      static_cast<std::uint8_t>((crc >> 16) & 0xFF),
+      static_cast<std::uint8_t>((crc >> 8) & 0xFF),
+      static_cast<std::uint8_t>(crc & 0xFF),
+  };
+  std::string s;
+  s.reserve(8);
+  s.push_back(kAlphabet[b[0] >> 2]);
+  s.push_back(kAlphabet[((b[0] & 0x03) << 4) | (b[1] >> 4)]);
+  s.push_back(kAlphabet[((b[1] & 0x0F) << 2) | (b[2] >> 6)]);
+  s.push_back(kAlphabet[b[2] & 0x3F]);
+  s.push_back(kAlphabet[b[3] >> 2]);
+  s.push_back(kAlphabet[(b[3] & 0x03) << 4]);
+  s += "==";
+  return s;
 }
 
 void SetCommonHeaders(brpc::Controller* cntl, std::string_view gateway_id,
@@ -84,10 +190,12 @@ void WriteError(brpc::Controller* cntl, std::string_view gateway_id,
 HttpFrontend::HttpFrontend(std::string gateway_id,
                            core::MetadataService& metadata,
                            data_path::http::HttpExecutor& http,
+                           core::multipart::MultipartCoordinator& multipart,
                            std::shared_ptr<spdlog::logger> logger)
     : gateway_id_(std::move(gateway_id)),
       metadata_(metadata),
       http_(http),
+      multipart_(multipart),
       logger_(std::move(logger)) {}
 
 void HttpFrontend::default_method(google::protobuf::RpcController* cntl_base,
@@ -115,6 +223,56 @@ void HttpFrontend::default_method(google::protobuf::RpcController* cntl_base,
     return;
   }
 
+  // multipart 路由（V2）：/v1/uploads/...
+  if (path.starts_with(kUploadsPrefix)) {
+    // 1) POST /v1/uploads/{bucket}/{key}        → StartUpload
+    if (method == brpc::HTTP_METHOD_POST) {
+      std::string upload_id;
+      bool has_complete = false;
+      std::string bucket, key;
+      if (ParseUploadIdPath(path, &upload_id, &has_complete) && has_complete) {
+        HandleCompleteUpload(cntl, upload_id);
+        return;
+      }
+      if (ParseUploadInitPath(path, &bucket, &key)) {
+        HandleStartUpload(cntl, bucket, key);
+        return;
+      }
+    }
+    // 2) PUT /v1/uploads/{upload_id}?partNumber=N  → UploadPart
+    if (method == brpc::HTTP_METHOD_PUT) {
+      std::string upload_id;
+      bool has_complete = false;
+      if (ParseUploadIdPath(path, &upload_id, &has_complete) && !has_complete) {
+        const auto pn = ParsePartNumber(cntl);
+        if (pn == 0) {
+          WriteError(cntl, gateway_id_,
+                     common::MakeError(ErrorCode::kBadRequest,
+                                      "PUT upload missing partNumber query"));
+          return;
+        }
+        HandleUploadPart(cntl, upload_id, pn);
+        return;
+      }
+    }
+    // 3) DELETE /v1/uploads/{upload_id}            → AbortUpload
+    if (method == brpc::HTTP_METHOD_DELETE) {
+      std::string upload_id;
+      bool has_complete = false;
+      if (ParseUploadIdPath(path, &upload_id, &has_complete) && !has_complete) {
+        HandleAbortUpload(cntl, upload_id);
+        return;
+      }
+    }
+    WriteError(cntl, gateway_id_,
+               common::MakeError(ErrorCode::kBadRequest,
+                                 "unsupported uploads route: " +
+                                     std::string(brpc::HttpMethod2Str(method)) +
+                                     " " + std::string(path)));
+    return;
+  }
+
+  // 整对象路由：/v1/objects/{bucket}/{key:*}
   std::string bucket;
   std::string key;
   if (!ParseObjectPath(path, &bucket, &key)) {
@@ -232,7 +390,8 @@ void HttpFrontend::HandlePut(brpc::Controller* cntl, const std::string& bucket,
   const auto payload = cntl->request_attachment().to_string();
   const std::span<const std::byte> body(
       reinterpret_cast<const std::byte*>(payload.data()), payload.size());
-  auto report = http_.Put(bucket, key, body);
+  auto expected_crc = ParseCrc32cHeader(cntl);
+  auto report = http_.Put(bucket, key, body, expected_crc);
   if (!report.success()) {
     WriteError(cntl, gateway_id_, report.error());
     return;
@@ -241,9 +400,124 @@ void HttpFrontend::HandlePut(brpc::Controller* cntl, const std::string& bucket,
   SetCommonHeaders(cntl, gateway_id_, "completed");
   cntl->http_response().SetHeader("ETag", report.value().meta.etag);
   cntl->http_response().SetHeader("x-fa-version", report.value().meta.version);
-  WriteJson(cntl, nlohmann::json{{"etag", report.value().meta.etag},
-                                  {"version", report.value().meta.version},
-                                  {"bytes_written", report.value().bytes_transferred}});
+  if (report.value().has_crc32c) {
+    cntl->http_response().SetHeader(
+        "x-amz-checksum-crc32c", EncodeCrc32cBase64(report.value().crc32c));
+  }
+  nlohmann::json resp;
+  resp["etag"] = report.value().meta.etag;
+  resp["version"] = report.value().meta.version;
+  resp["bytes_written"] = report.value().bytes_transferred;
+  WriteJson(cntl, resp);
+}
+
+// POST /v1/uploads/{bucket}/{key}  → 创建 multipart upload。
+void HttpFrontend::HandleStartUpload(brpc::Controller* cntl,
+                                       const std::string& bucket,
+                                       const std::string& key) {
+  // 复用 MultipartCoordinator，与控制面 baidu_std multipart 共用一份后端状态。
+  core::multipart::StartUploadParams params;
+  params.bucket = bucket;
+  params.object_key = key;
+  params.data_path = "http-tcp";
+  // expected_total_size / idempotency_key 走 query string（可选，本期不强求）。
+  if (const auto* q = cntl->http_request().uri().GetQuery("expected_total_size");
+      q != nullptr && !q->empty()) {
+    try { params.expected_total_size = std::stoull(*q); } catch (...) {}
+  }
+  if (const auto* q = cntl->http_request().uri().GetQuery("idempotency_key");
+      q != nullptr) {
+    params.idempotency_key = *q;
+  }
+
+  auto out = multipart_.StartUpload(params);
+  if (!out.success()) {
+    WriteError(cntl, gateway_id_, out.error());
+    return;
+  }
+  cntl->http_response().set_status_code(brpc::HTTP_STATUS_OK);
+  SetCommonHeaders(cntl, gateway_id_, "completed");
+  nlohmann::json resp;
+  resp["upload_id"] = out.value().upload_id;
+  resp["max_part_size"] = out.value().max_part_size;
+  WriteJson(cntl, resp);
+}
+
+// PUT /v1/uploads/{upload_id}?partNumber=N
+void HttpFrontend::HandleUploadPart(brpc::Controller* cntl,
+                                     const std::string& upload_id,
+                                     std::uint32_t part_number) {
+  const auto payload = cntl->request_attachment().to_string();
+  const std::span<const std::byte> body(
+      reinterpret_cast<const std::byte*>(payload.data()), payload.size());
+  auto expected_crc = ParseCrc32cHeader(cntl);
+  auto report = http_.PutPart(upload_id, part_number, body, expected_crc);
+  if (!report.success()) {
+    WriteError(cntl, gateway_id_, report.error());
+    return;
+  }
+  cntl->http_response().set_status_code(brpc::HTTP_STATUS_OK);
+  SetCommonHeaders(cntl, gateway_id_, "completed");
+  cntl->http_response().SetHeader("ETag", report.value().meta.etag);
+  if (report.value().has_crc32c) {
+    cntl->http_response().SetHeader(
+        "x-amz-checksum-crc32c", EncodeCrc32cBase64(report.value().crc32c));
+  }
+  nlohmann::json resp;
+  resp["part_etag"] = report.value().meta.etag;
+  resp["bytes_written"] = report.value().bytes_transferred;
+  WriteJson(cntl, resp);
+}
+
+// POST /v1/uploads/{upload_id}/complete   body = {"parts":[{"part_number":N,"etag":"..."}, ...]}
+void HttpFrontend::HandleCompleteUpload(brpc::Controller* cntl,
+                                         const std::string& upload_id) {
+  const auto raw = cntl->request_attachment().to_string();
+  std::vector<backend::PartRecord> parts;
+  try {
+    auto j = nlohmann::json::parse(raw);
+    for (const auto& p : j.at("parts")) {
+      backend::PartRecord r;
+      r.part_number = p.at("part_number").get<std::uint32_t>();
+      r.etag        = p.at("etag").get<std::string>();
+      // offset/size：CompleteUpload 服务端用 RegisterPart 已经登记过 size，
+      // 这里只校验 part_number + etag 一致即可，offset/size 留 0 让后端按记录值算。
+      parts.push_back(std::move(r));
+    }
+  } catch (const std::exception& e) {
+    WriteError(cntl, gateway_id_, common::MakeError(
+        ErrorCode::kBadRequest,
+        std::string("CompleteUpload body parse failed: ") + e.what()));
+    return;
+  }
+
+  auto meta = multipart_.CompleteUpload(upload_id, parts);
+  if (!meta.success()) {
+    WriteError(cntl, gateway_id_, meta.error());
+    return;
+  }
+  cntl->http_response().set_status_code(brpc::HTTP_STATUS_OK);
+  SetCommonHeaders(cntl, gateway_id_, "completed");
+  cntl->http_response().SetHeader("ETag", meta.value().etag);
+  cntl->http_response().SetHeader("x-fa-version", meta.value().version);
+  nlohmann::json resp;
+  resp["etag"]           = meta.value().etag;
+  resp["version"]        = meta.value().version;
+  resp["content_length"] = meta.value().content_length;
+  WriteJson(cntl, resp);
+}
+
+// DELETE /v1/uploads/{upload_id}
+void HttpFrontend::HandleAbortUpload(brpc::Controller* cntl,
+                                      const std::string& upload_id) {
+  auto out = multipart_.AbortUpload(upload_id);
+  if (!out.success()) {
+    WriteError(cntl, gateway_id_, out.error());
+    return;
+  }
+  cntl->http_response().set_status_code(brpc::HTTP_STATUS_OK);
+  SetCommonHeaders(cntl, gateway_id_, "completed");
+  WriteJson(cntl, nlohmann::json{{"aborted", true}});
 }
 
 }  // namespace us3_turbo_access::gateway::api

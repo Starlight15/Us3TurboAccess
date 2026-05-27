@@ -10,6 +10,7 @@
 #include "backend/backend.h"
 #include "core/session/session.h"
 #include "data_path/data_path_executor.h"
+#include "us3_turbo_access/gateway/options.h"
 #include "us3_turbo_access/gateway/result.h"
 
 class cuObjServer;
@@ -34,8 +35,8 @@ namespace us3_turbo_access::gateway::data_path::gds {
  */
 class GdsExecutor final : public IDataPathExecutor {
  public:
-  GdsExecutor(std::string public_host, std::string bind_host, int port,
-              backend::IBackend& backend,
+  GdsExecutor(std::string public_host, std::string bind_host,
+              const GdsOptions& opts, backend::IBackend& backend,
               core::MetadataService& metadata,
               std::shared_ptr<spdlog::logger> logger);
   ~GdsExecutor() override;
@@ -57,7 +58,7 @@ class GdsExecutor final : public IDataPathExecutor {
   [[nodiscard]] Result<bool>
     OnSessionOpened(const core::Session& session) override;
 
-  [[nodiscard]] int                port() const noexcept { return port_; }
+  [[nodiscard]] int                port() const noexcept { return opts_.rdma_port; }
   [[nodiscard]] const std::string& bind_host() const noexcept { return bind_host_; }
 
   /**
@@ -95,7 +96,7 @@ class GdsExecutor final : public IDataPathExecutor {
 
   std::string                       public_host_;
   std::string                       bind_host_;
-  int                               port_{0};
+  GdsOptions                        opts_;
   backend::IBackend&                backend_;
   core::MetadataService&            metadata_;
   std::shared_ptr<spdlog::logger>   logger_;

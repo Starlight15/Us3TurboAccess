@@ -12,6 +12,10 @@ class TransferRouter;
 class GdsDataClient;
 class GdsMemoryRegistry;
 class CuObjectClient;
+class ClientExecutor;
+class RdmaTransferPath;
+class HttpTransferPath;
+class HttpDataClient;
 
 /**
  * @brief 内部装配体：拥有所有组件实例并管理生命周期。
@@ -38,6 +42,10 @@ class ClientCore {
   [[nodiscard]] GdsDataClient& gds_data_client();
   [[nodiscard]] GdsMemoryRegistry& gds_memory_registry();
   [[nodiscard]] const CuObjectClient& cuobj_client() const;
+  [[nodiscard]] const RdmaTransferPath& rdma_transfer_path() const;
+  [[nodiscard]] const HttpTransferPath& http_transfer_path() const;
+  [[nodiscard]] HttpDataClient& http_data_client();
+  [[nodiscard]] ClientExecutor& async_executor() const;
 
  private:
   struct Impl;

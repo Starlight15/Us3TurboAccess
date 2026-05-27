@@ -17,6 +17,10 @@ message OpenSessionRequest {
   uint64 expected_size = 10;
   // 11 was buffer_descriptor (removed: set by client, never read by server)
   string idempotency_key = 12;
+  // 标记本 session 是 multipart upload 的单个 part：
+  //   expected_size 解释为本 part 字节数（用于 RDMA 路径预分配 buffer），
+  //   gateway 跳过整对象 Reserve（整对象在 StartUpload 时已预留）。
+  bool is_multipart_part = 13;
   reserved 8, 11;
 }
 
