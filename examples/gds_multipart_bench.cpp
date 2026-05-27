@@ -119,6 +119,18 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  // 预注册每个 part 的 device buffer 到 cuObj descriptor 表，避免热路径
+  // 上 lazy register 的毫秒级 nvidia_p2p_get_pages 开销。
+  for (std::size_t i = 0; i < num_parts; ++i) {
+    auto r = client.RegisterDeviceBuffer(dev_parts[i], part_sizes[i]);
+    if (!r.success()) {
+      std::cerr << "RegisterDeviceBuffer failed: " << r.error().message
+                << std::endl;
+      for (auto* q : dev_parts) if (q) cudaFree(q);
+      return 1;
+    }
+  }
+
   const std::size_t concurrency = a.threads > 0 ? a.threads : 4;
 
   auto UploadOne = [&](const std::string& key) -> bool {
@@ -181,6 +193,9 @@ int main(int argc, char** argv) {
   runner.PrintHuman(std::cerr);
   runner.PrintJson(std::cout);
 
+  for (std::size_t i = 0; i < num_parts; ++i) {
+    if (dev_parts[i]) (void)client.UnregisterDeviceBuffer(dev_parts[i]);
+  }
   for (auto* q : dev_parts) if (q) cudaFree(q);
   return failed == 0 ? 0 : 1;
 }

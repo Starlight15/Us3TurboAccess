@@ -22,6 +22,11 @@ struct CuObjApi {
   using GetCtx = void* (*)(const void*);
   using GetObject = ssize_t (*)(void*, void*, void*, std::size_t, loff_t, loff_t);
   using PutObject = ssize_t (*)(void*, void*, void*, std::size_t, loff_t, loff_t);
+  // 直通 RDMA token API：给一段 (ptr, offset, size, op) 返一段 token 字符串。
+  // 调用方负责通过 put_rdma_token 释放；buffer 必须已经 get_descriptor。
+  using GetRDMAToken = cuObjErr_t (*)(void*, void*, std::size_t, std::size_t,
+                                       cuObjOpType_t, char**);
+  using PutRDMAToken = cuObjErr_t (*)(void*, char*);
 
   Constructor constructor{nullptr};
   Destructor destructor{nullptr};
@@ -32,6 +37,8 @@ struct CuObjApi {
   GetCtx get_ctx{nullptr};
   GetObject cuobj_get{nullptr};
   PutObject cuobj_put{nullptr};
+  GetRDMAToken get_rdma_token{nullptr};
+  PutRDMAToken put_rdma_token{nullptr};
 };
 
 /**

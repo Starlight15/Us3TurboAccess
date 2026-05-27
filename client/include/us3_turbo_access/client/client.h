@@ -112,6 +112,26 @@ class Client {
     StartUpload(const ObjectId& object, std::size_t expected_total_size = 0,
                 const std::string& idempotency_key = {});
 
+  /**
+   * @brief 预先把 GPU device buffer 注册到 cuObj descriptor 表。可选优化。
+   *
+   * GDS 通路下，每次 PUT/GET 之前 buffer 必须已经通过 cuMemObjGetDescriptor
+   * 注册（pin 到 BAR1）。不调本接口时 SDK 会在第一次传输时 lazy 注册，但
+   * 注册是毫秒级 syscall（nvidia_p2p_get_pages），落到热路径会抖动。
+   * 推荐：cudaMalloc 之后立即 RegisterDeviceBuffer，cudaFree 之前
+   * UnregisterDeviceBuffer。idempotent。
+   *
+   * 非 GDS 通路（HTTP / RDMA）下本调用 no-op，返回 success。
+   */
+  [[nodiscard]] Result<bool> RegisterDeviceBuffer(void* ptr, std::size_t size);
+
+  /**
+   * @brief 反注册 device buffer。**必须在 cudaFree(ptr) 之前调用**，否则
+   * nvidia-fs 可能在内核侧死锁（NVIDIA 文档明确警告）。idempotent；从未
+   * 注册或已反注册过的 ptr 也返回 success。
+   */
+  [[nodiscard]] Result<bool> UnregisterDeviceBuffer(void* ptr);
+
  private:
   std::unique_ptr<ClientCore> core_;
 };

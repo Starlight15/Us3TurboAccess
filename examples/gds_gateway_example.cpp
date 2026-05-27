@@ -72,6 +72,17 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  // cudaMalloc 后立即注册到 cuObj descriptor 表（cudaFree 之前必须反注册）。
+  if (auto r = client.RegisterDeviceBuffer(device_upload, bytes); !r.success()) {
+    std::cerr << "RegisterDeviceBuffer(upload) failed: " << r.error().message << std::endl;
+    cudaFree(device_upload); cudaFree(device_download); return 1;
+  }
+  if (auto r = client.RegisterDeviceBuffer(device_download, bytes); !r.success()) {
+    std::cerr << "RegisterDeviceBuffer(download) failed: " << r.error().message << std::endl;
+    client.UnregisterDeviceBuffer(device_upload);
+    cudaFree(device_upload); cudaFree(device_download); return 1;
+  }
+
   RequestOptions request;
   request.object = ObjectId{.bucket = bucket, .key = object_key};
 
@@ -116,6 +127,9 @@ int main(int argc, char** argv) {
   const bool same = std::memcmp(host_upload.data(), host_download.data(), bytes) == 0;
   std::cout << "same=" << (same ? "true" : "false") << std::endl;
 
+  // cudaFree 前先反注册
+  (void)client.UnregisterDeviceBuffer(device_upload);
+  (void)client.UnregisterDeviceBuffer(device_download);
   cudaFree(device_upload);
   cudaFree(device_download);
   return same ? 0 : 1;

@@ -14,10 +14,13 @@
 namespace us3_turbo_access::client {
 
 /**
- * @brief 在 cuObject 数据面回调中向 gateway 发送 chunk RPC 的派发器。
+ * @brief GDS 数据面 chunk RPC 发起器（GdsChunk RPC 客户端薄包装）。
  *
- * 构造时持有发送 chunk RPC 所需的全部稳定上下文（GdsDataClient、ClientOptions、
- * 会话与请求快照）。callback 内仅需注入本次 chunk 的 rdma_token / offset / size。
+ * 构造时绑定一次会话上下文（GdsDataClient、ClientOptions、TransferSession +
+ * RequestOptions 快照），Dispatch 内只接 (rdma_token, chunk_offset, chunk_size)
+ * 三个变化参数。token-direct 数据面 (cuobject_client.cpp::ExecuteTransfer) 每
+ * 个 PUT/GET 调一次 Dispatch；multipart 模式下 SetMultipart 把绝对 offset 转
+ * part 内偏移。
  */
 class ChunkDispatcher {
  public:

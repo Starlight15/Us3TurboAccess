@@ -124,6 +124,18 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  // 预先把 pool 内每份 device buffer 注册到 cuObj descriptor 表，避免
+  // 热路径上的 lazy register 抖动。
+  for (std::size_t i = 0; i < pool_size; ++i) {
+    auto r = client.RegisterDeviceBuffer(dev_pool[i], a.object_size);
+    if (!r.success()) {
+      std::cerr << "RegisterDeviceBuffer failed: " << r.error().message
+                << std::endl;
+      free_pool();
+      return 1;
+    }
+  }
+
   // 捕获主线程当前 device；每个 worker 线程入口处 cudaSetDevice。
   int main_device = 0;
   (void)cudaGetDevice(&main_device);
@@ -226,6 +238,10 @@ int main(int argc, char** argv) {
   runner.PrintHuman(std::cerr);
   runner.PrintJson(std::cout);
 
+  // 反注册必须在 cudaFree 之前；free_pool 内部走 cudaFree，所以先 unregister
+  for (std::size_t i = 0; i < pool_size; ++i) {
+    (void)client.UnregisterDeviceBuffer(dev_pool[i]);
+  }
   free_pool();
   return failed == 0 ? 0 : 1;
 }

@@ -6,7 +6,7 @@ namespace us3_turbo_access::client {
 namespace {
 
 [[nodiscard]] Error MakeMissingRdmaTokenError(const std::string& request_id) {
-  return MakeTransportFailure("cuObject callback did not provide a valid RDMA token",
+  return MakeTransportFailure("GDS chunk dispatched without a valid RDMA token",
                               DataPath::kGdsCuObject, request_id, true);
 }
 
@@ -31,8 +31,8 @@ void ChunkDispatcher::SetMultipart(std::string upload_id,
   part_base_offset_ = request_.offset;
 }
 
-// 每个 cuObj chunk 回调发一条 GdsGet/GdsPut RPC。
-// multipart 模式下需将绝对偏移转为 part 内偏移。
+// 把 (token, offset, size) 打成一发 GdsChunk RPC 发给 gateway，gateway 完成
+// libibverbs RDMA 后响应。multipart 模式下绝对 offset 转 part 内偏移。
 Result<ChunkDispatcher::Outcome> ChunkDispatcher::Dispatch(const std::string& rdma_token,
                                                             std::uint64_t chunk_offset,
                                                             std::size_t chunk_size) const {

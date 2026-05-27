@@ -28,6 +28,15 @@ target_link_libraries(us3_turbo_access_gds_multipart_bench
 add_executable(us3_turbo_access_cuobj_probe
   cuobj_probe.cpp)
 
+add_executable(us3_turbo_access_gds_token_probe
+  gds_token_probe.cpp)
+target_include_directories(us3_turbo_access_gds_token_probe
+  PRIVATE ${PROJECT_SOURCE_DIR} ${CUFILE_INCLUDE_DIR})
+target_link_libraries(us3_turbo_access_gds_token_probe
+  PRIVATE
+    Us3TurboAccess::client
+    ${CUDART_LIBRARY})
+
 add_executable(us3_turbo_access_env_probe
   env_probe.cpp)
 target_include_directories(us3_turbo_access_env_probe

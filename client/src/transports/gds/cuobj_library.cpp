@@ -65,6 +65,15 @@ template <typename Symbol>
       ResolveSymbol<CuObjApi::PutObject>(handle, "_ZN11cuObjClient8cuObjPutEPvS0_mll");
   if (!cuobj_put.success()) return Result<CuObjApi>::Failure(cuobj_put.error());
 
+  // Token-direct API：绕开 cuObjPut 回调机制，直接生成 / 释放 RDMA token。
+  auto get_rdma_token = ResolveSymbol<CuObjApi::GetRDMAToken>(
+      handle, "_ZN11cuObjClient20cuMemObjGetRDMATokenEPvmm16cuObjOpType_enumPPc");
+  if (!get_rdma_token.success()) return Result<CuObjApi>::Failure(get_rdma_token.error());
+
+  auto put_rdma_token = ResolveSymbol<CuObjApi::PutRDMAToken>(
+      handle, "_ZN11cuObjClient20cuMemObjPutRDMATokenEPc");
+  if (!put_rdma_token.success()) return Result<CuObjApi>::Failure(put_rdma_token.error());
+
   api.constructor = constructor.value();
   api.destructor = destructor.value();
   api.is_connected = is_connected.value();
@@ -74,6 +83,8 @@ template <typename Symbol>
   api.get_ctx = get_ctx.value();
   api.cuobj_get = cuobj_get.value();
   api.cuobj_put = cuobj_put.value();
+  api.get_rdma_token = get_rdma_token.value();
+  api.put_rdma_token = put_rdma_token.value();
   return Result<CuObjApi>::Success(api);
 }
 

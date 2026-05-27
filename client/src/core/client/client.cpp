@@ -483,4 +483,25 @@ Result<MultipartUpload> Client::StartUpload(const ObjectId& object,
   return Result<MultipartUpload>::Success(MultipartUpload(std::move(impl)));
 }
 
+Result<bool> Client::RegisterDeviceBuffer(void* ptr, std::size_t size) {
+  if (!core_->initialized()) {
+    return Result<bool>::Failure(MakeNotInitialized("Client"));
+  }
+  if (core_->options().data_path != DataPath::kGdsCuObject) {
+    // 非 GDS 通路无需 cuObj descriptor 注册；保持 idempotent 友好。
+    return Result<bool>::Success(true);
+  }
+  return core_->gds_memory_registry().RegisterBuffer(ptr, size);
+}
+
+Result<bool> Client::UnregisterDeviceBuffer(void* ptr) {
+  if (!core_->initialized()) {
+    return Result<bool>::Failure(MakeNotInitialized("Client"));
+  }
+  if (core_->options().data_path != DataPath::kGdsCuObject) {
+    return Result<bool>::Success(true);
+  }
+  return core_->gds_memory_registry().UnregisterBuffer(ptr);
+}
+
 }  // namespace us3_turbo_access::client
