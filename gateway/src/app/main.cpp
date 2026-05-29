@@ -11,6 +11,7 @@
 DEFINE_int32(brpc_port, 8080, "Gateway brpc + HTTP port");
 DEFINE_int32(idle_timeout_sec, -1, "brpc idle timeout in seconds");
 DEFINE_int32(num_threads, 4, "brpc worker thread count");
+DEFINE_int32(max_concurrency, 0, "brpc max concurrent requests (0 = unlimited)");
 DEFINE_int32(io_worker_threads, 32,
              "Background IO pool size handling chunk-level RDMA / backend IO");
 DEFINE_string(bind_host, "0.0.0.0", "Bind host for the brpc listener");
@@ -74,6 +75,7 @@ int main(int argc, char** argv) {
   options.brpc_port          = FLAGS_brpc_port;
   options.idle_timeout_sec   = FLAGS_idle_timeout_sec;
   options.num_threads        = FLAGS_num_threads;
+  options.max_concurrency    = FLAGS_max_concurrency;
   options.io_worker_threads  = FLAGS_io_worker_threads;
   options.gateway_id         = FLAGS_gateway_id;
 

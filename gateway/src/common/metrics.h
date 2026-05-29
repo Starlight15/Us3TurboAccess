@@ -45,6 +45,7 @@ struct Metrics {
   bvar::LatencyRecorder         http_put_latency_us;
   bvar::LatencyRecorder         http_get_latency_us;
   bvar::LatencyRecorder         http_head_latency_us;
+  bvar::Adder<std::int64_t>     http_rejected_total;  // 503 due to max_concurrency
 
   // Backend
   bvar::Adder<std::int64_t>     backend_write_total;

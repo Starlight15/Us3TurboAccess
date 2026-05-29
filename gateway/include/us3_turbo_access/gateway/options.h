@@ -107,6 +107,12 @@ struct GatewayOptions {
   int         idle_timeout_sec{-1};
   /** brpc worker thread count for the control plane. */
   int         num_threads{4};
+  /**
+   * Maximum concurrent requests allowed by brpc server.
+   * 0 = unlimited (default). Set to a positive value to enable rate limiting.
+   * When exceeded, brpc returns 503 Service Unavailable.
+   */
+  int         max_concurrency{0};
   /** Background IO pool size used by chunk RPC handlers. */
   int         io_worker_threads{32};
 

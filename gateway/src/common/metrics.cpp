@@ -38,6 +38,7 @@ Metrics::Metrics()
       http_put_latency_us("gateway_http_put_latency_us"),
       http_get_latency_us("gateway_http_get_latency_us"),
       http_head_latency_us("gateway_http_head_latency_us"),
+      http_rejected_total("gateway_http_rejected_total"),
       backend_write_total("gateway_backend_write_total"),
       backend_read_total("gateway_backend_read_total"),
       backend_write_bytes("gateway_backend_write_bytes"),

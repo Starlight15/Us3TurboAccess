@@ -126,6 +126,7 @@ Result<bool> GatewayRuntime::Initialize() {
   brpc::ServerOptions server_options;
   server_options.idle_timeout_sec = options_.idle_timeout_sec;
   server_options.num_threads = options_.num_threads;
+  server_options.max_concurrency = options_.max_concurrency;
   server_options.http_master_service = http_frontend_.get();
 
   if (server_.AddService(control_plane_.get(),
