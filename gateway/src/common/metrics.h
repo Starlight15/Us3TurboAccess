@@ -33,6 +33,19 @@ struct Metrics {
   bvar::LatencyRecorder         gds_put_latency_us;
   bvar::LatencyRecorder         gds_get_latency_us;
 
+  // HTTP data plane（PUT / GET / HEAD 单对象路径；multipart 路径待 HTTP-multipart review 后补齐）
+  bvar::Adder<std::int64_t>     http_put_total;
+  bvar::Adder<std::int64_t>     http_get_total;
+  bvar::Adder<std::int64_t>     http_head_total;
+  bvar::Adder<std::int64_t>     http_put_fail_total;
+  bvar::Adder<std::int64_t>     http_get_fail_total;
+  bvar::Adder<std::int64_t>     http_head_fail_total;
+  bvar::Adder<std::int64_t>     http_put_bytes;
+  bvar::Adder<std::int64_t>     http_get_bytes;
+  bvar::LatencyRecorder         http_put_latency_us;
+  bvar::LatencyRecorder         http_get_latency_us;
+  bvar::LatencyRecorder         http_head_latency_us;
+
   // Backend
   bvar::Adder<std::int64_t>     backend_write_total;
   bvar::Adder<std::int64_t>     backend_read_total;

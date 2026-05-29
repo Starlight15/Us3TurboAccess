@@ -33,6 +33,7 @@ enum class ErrorCode {
   kSessionNotFound,
   kTicketInvalid,
   kStaleState,
+  kPayloadTooLarge,  // HTTP 413: PUT body exceeds gateway/client size limit
 };
 
 [[nodiscard]] constexpr std::string_view ToString(ErrorCode code) noexcept {
@@ -55,6 +56,7 @@ enum class ErrorCode {
     case ErrorCode::kSessionNotFound:     return "session_not_found";
     case ErrorCode::kTicketInvalid:       return "ticket_invalid";
     case ErrorCode::kStaleState:          return "stale_state";
+    case ErrorCode::kPayloadTooLarge:     return "payload_too_large";
   }
   return "unknown";
 }

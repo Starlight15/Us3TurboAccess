@@ -139,6 +139,15 @@ struct GatewayOptions {
   /** Multipart upload TTL: orphans older than this are reclaimed. */
   std::chrono::seconds multipart_ttl{std::chrono::minutes(30)};
 
+  /**
+   * 单次 HTTP PUT body 上限（覆盖单对象 PUT 与 multipart UploadPart 两条入口）。
+   * 超过此值 HttpFrontend 直接返回 413 + kPayloadTooLarge。
+   * brpc 框架层 max_body_size 会被抬到 http_max_put_bytes + 少量 header 余量，
+   * 保证所有"超限"路径都由 HttpFrontend 自己统一处理，而不是被 brpc 提前拒。
+   * 默认 1 GiB —— 与 cuObjServer 单次传输上限对齐。
+   */
+  std::size_t http_max_put_bytes{1ULL * 1024ULL * 1024ULL * 1024ULL};
+
   /** Optional logger; if null the gateway falls back to a null sink. */
   std::shared_ptr<spdlog::logger> logger;
 };

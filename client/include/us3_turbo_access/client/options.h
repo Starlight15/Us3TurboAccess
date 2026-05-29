@@ -47,6 +47,15 @@ struct HttpClientOptions {
   std::chrono::milliseconds retry_initial_backoff{std::chrono::milliseconds(100)};
   /** Upper bound for the exponential backoff between retries. */
   std::chrono::milliseconds retry_max_backoff{std::chrono::milliseconds(2000)};
+
+  /**
+   * 单次 PutObject 接受的最大 body 字节数。超过此值在 client 端立刻返回
+   * kPayloadTooLarge，避免把超大 buffer 推到 TCP 再被 server 413。
+   * 默认 5 GiB —— 与 AWS S3 单段 PUT 服务端硬限对齐；如果 gateway 端
+   * http_max_put_bytes 更严（默认 1 GiB），实际仍以 server 端为准。
+   * 大于此值的对象请改用 StartUpload + UploadPart 分片上传。
+   */
+  std::size_t put_single_max_bytes{5ULL * 1024ULL * 1024ULL * 1024ULL};
 };
 
 /**

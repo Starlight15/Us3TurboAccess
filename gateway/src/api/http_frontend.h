@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <memory>
 #include <string>
 
@@ -44,6 +45,7 @@ class HttpFrontend final : public ::us3_turbo_access::gateway::GatewayHttpServic
   HttpFrontend(std::string gateway_id, core::MetadataService& metadata,
                data_path::http::HttpExecutor& http,
                core::multipart::MultipartCoordinator& multipart,
+               std::size_t max_put_bytes,
                std::shared_ptr<spdlog::logger> logger);
 
   void default_method(google::protobuf::RpcController* cntl,
@@ -75,6 +77,7 @@ class HttpFrontend final : public ::us3_turbo_access::gateway::GatewayHttpServic
   core::MetadataService&                   metadata_;
   data_path::http::HttpExecutor&           http_;
   core::multipart::MultipartCoordinator&   multipart_;
+  std::size_t                              max_put_bytes_{0};
   std::shared_ptr<spdlog::logger>          logger_;
 };
 

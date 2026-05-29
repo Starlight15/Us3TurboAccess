@@ -121,7 +121,7 @@ Result<bool> GatewayRuntime::Initialize() {
       *multipart_coordinator_, *io_pool_, logger_);
   http_frontend_ = std::make_unique<api::HttpFrontend>(
       options_.gateway_id, *metadata_, *http_executor_,
-      *multipart_coordinator_, logger_);
+      *multipart_coordinator_, options_.http_max_put_bytes, logger_);
 
   brpc::ServerOptions server_options;
   server_options.idle_timeout_sec = options_.idle_timeout_sec;

@@ -48,6 +48,10 @@ ErrorCode HttpStatusToCode(int status) {
     case brpc::HTTP_STATUS_BAD_REQUEST:              return ErrorCode::kBadRequest;
     case brpc::HTTP_STATUS_REQUEST_RANGE_NOT_SATISFIABLE:
                                                        return ErrorCode::kRangeNotSatisfiable;
+    case brpc::HTTP_STATUS_REQUEST_ENTITY_TOO_LARGE:  return ErrorCode::kPayloadTooLarge;
+    case brpc::HTTP_STATUS_CONFLICT:                  return ErrorCode::kStaleState;
+    case 507:  // HTTP_STATUS_INSUFFICIENT_STORAGE (brpc 未定义此常量)
+                                                       return ErrorCode::kCapacityExceeded;
     case brpc::HTTP_STATUS_UNAUTHORIZED:
     case brpc::HTTP_STATUS_FORBIDDEN:                return ErrorCode::kControlPlaneError;
     case brpc::HTTP_STATUS_INTERNAL_SERVER_ERROR:    return ErrorCode::kInternal;
@@ -86,7 +90,7 @@ Error MapHttpFailure(const brpc::Controller& cntl, std::string_view fallback) {
   // 但优先读它意味着未来 server 切到写真正的 ErrorCode 数值时本端不需要改。
   if (auto raw = ParseErrorCodeHeader(cntl); raw.has_value()) {
     // 头里也是 HTTP code 时，HttpStatusToCode 已处理；否则按枚举值收。
-    if (*raw >= 0 && *raw <= static_cast<int>(ErrorCode::kStaleState)) {
+    if (*raw >= 0 && *raw <= static_cast<int>(ErrorCode::kPayloadTooLarge)) {
       code = static_cast<ErrorCode>(*raw);
     }
   }

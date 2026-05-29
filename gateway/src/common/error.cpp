@@ -21,6 +21,7 @@ int ToHttpStatus(ErrorCode code) noexcept {
     case ErrorCode::kNotFound:            return 404;
     case ErrorCode::kSessionNotFound:     return 404;
     case ErrorCode::kRangeNotSatisfiable: return 416;
+    case ErrorCode::kPayloadTooLarge:     return 413;
     case ErrorCode::kCapacityExceeded:    return 507;
     case ErrorCode::kStaleState:          return 409;
     case ErrorCode::kTicketInvalid:       return 401;

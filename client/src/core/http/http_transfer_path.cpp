@@ -169,6 +169,18 @@ Result<TransferOutcome> HttpTransferPath::PutObject(
   auto pre = Preflight(available(), buffer.type);
   if (!pre.success()) return Result<TransferOutcome>::Failure(pre.error());
 
+  // 单段 PUT 大小兜底：超过 put_single_max_bytes（默认 5 GiB，与 S3 服务端硬限对齐）
+  // 直接拒绝，避免把超大 buffer 推到 TCP 再被 gateway 413。建议改走分片上传。
+  if (buffer.size > options_.http.put_single_max_bytes) {
+    return Result<TransferOutcome>::Failure(MakeError(
+        ErrorCode::kPayloadTooLarge,
+        "PUT body " + std::to_string(buffer.size) +
+            " exceeds put_single_max_bytes " +
+            std::to_string(options_.http.put_single_max_bytes) +
+            "; use StartUpload + UploadPart for multipart upload",
+        /*retryable=*/false));
+  }
+
   // V2：本期默认 send_crc32c=true，算一次 CRC32C 注入 header 让 server 端校验。
   std::optional<std::uint32_t> crc;
   if (options_.http.send_crc32c && buffer.size > 0 && buffer.data != nullptr) {

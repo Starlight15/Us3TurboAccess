@@ -33,6 +33,11 @@ DEFINE_uint64(multipart_max_part_size, 1ULL * 1024ULL * 1024ULL * 1024ULL,
 DEFINE_uint64(multipart_min_part_size, 5ULL * 1024ULL * 1024ULL,
               "Minimum part size in bytes (S3-style; 0 disables)");
 
+// HTTP data plane
+DEFINE_uint64(http_max_put_bytes, 1ULL * 1024ULL * 1024ULL * 1024ULL,
+              "Maximum body bytes accepted on a single HTTP PUT (single object or multipart part); "
+              "超过此值返回 413 kPayloadTooLarge");
+
 // GDS 数据通路
 DEFINE_bool(gds_enable, true, "Enable GDS / cuObjServer data path");
 DEFINE_int32(gds_rdma_port, 18516, "GDS cuObjServer RDMA listener port");
@@ -83,6 +88,9 @@ int main(int argc, char** argv) {
   // Multipart
   options.multipart_max_part_size = static_cast<std::size_t>(FLAGS_multipart_max_part_size);
   options.multipart_min_part_size = static_cast<std::size_t>(FLAGS_multipart_min_part_size);
+
+  // HTTP data plane
+  options.http_max_put_bytes = static_cast<std::size_t>(FLAGS_http_max_put_bytes);
 
   // GDS 数据通路
   options.gds_enable      = FLAGS_gds_enable;

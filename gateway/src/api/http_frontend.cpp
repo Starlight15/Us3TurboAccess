@@ -1,6 +1,7 @@
 #include "api/http_frontend.h"
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <sstream>
 #include <string>
@@ -21,6 +22,7 @@
 #include "core/multipart/multipart_coordinator.h"
 #include "data_path/http/http_executor.h"
 #include "common/error.h"
+#include "common/metrics.h"
 
 namespace us3_turbo_access::gateway::api {
 
@@ -160,6 +162,18 @@ std::string EncodeCrc32cBase64(std::uint32_t crc) {
   return s;
 }
 
+// 从 Content-Length 头解出客户端声明的 body 大小；解析失败或没头返回 nullopt。
+// 实际收到的字节数由 cntl->request_attachment().size() 反映。
+std::optional<std::uint64_t> ParseContentLengthHeader(const brpc::Controller* cntl) {
+  const auto* h = cntl->http_request().GetHeader("Content-Length");
+  if (h == nullptr || h->empty()) return std::nullopt;
+  try {
+    return static_cast<std::uint64_t>(std::stoull(*h));
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
 void SetCommonHeaders(brpc::Controller* cntl, std::string_view gateway_id,
                       std::string_view transfer_status) {
   cntl->http_response().SetHeader("x-fa-gateway-id", std::string(gateway_id));
@@ -191,11 +205,13 @@ HttpFrontend::HttpFrontend(std::string gateway_id,
                            core::MetadataService& metadata,
                            data_path::http::HttpExecutor& http,
                            core::multipart::MultipartCoordinator& multipart,
+                           std::size_t max_put_bytes,
                            std::shared_ptr<spdlog::logger> logger)
     : gateway_id_(std::move(gateway_id)),
       metadata_(metadata),
       http_(http),
       multipart_(multipart),
+      max_put_bytes_(max_put_bytes),
       logger_(std::move(logger)) {}
 
 void HttpFrontend::default_method(google::protobuf::RpcController* cntl_base,
@@ -333,8 +349,10 @@ void HttpFrontend::HandleVars(brpc::Controller* cntl, const std::string& path) {
 
 void HttpFrontend::HandleHead(brpc::Controller* cntl, const std::string& bucket,
                               const std::string& key) {
+  common::ScopedLatency latency(common::metrics().http_head_latency_us);
   auto head = metadata_.Head(bucket, key);
   if (!head.success()) {
+    common::metrics().http_head_fail_total << 1;
     WriteError(cntl, gateway_id_, head.error());
     return;
   }
@@ -344,12 +362,15 @@ void HttpFrontend::HandleHead(brpc::Controller* cntl, const std::string& bucket,
                                   std::to_string(head.value().content_length));
   cntl->http_response().SetHeader("ETag", head.value().etag);
   cntl->http_response().SetHeader("x-fa-version", head.value().version);
+  common::metrics().http_head_total << 1;
 }
 
 void HttpFrontend::HandleGet(brpc::Controller* cntl, const std::string& bucket,
                              const std::string& key) {
+  common::ScopedLatency latency(common::metrics().http_get_latency_us);
   auto head = metadata_.Head(bucket, key);
   if (!head.success()) {
+    common::metrics().http_get_fail_total << 1;
     WriteError(cntl, gateway_id_, head.error());
     return;
   }
@@ -357,6 +378,7 @@ void HttpFrontend::HandleGet(brpc::Controller* cntl, const std::string& bucket,
   const auto range =
       common::ParseHttpRange(range_header, head.value().content_length);
   if (range.unsatisfiable) {
+    common::metrics().http_get_fail_total << 1;
     WriteError(cntl, gateway_id_,
                common::MakeError(ErrorCode::kRangeNotSatisfiable,
                                 "range not satisfiable"));
@@ -365,6 +387,7 @@ void HttpFrontend::HandleGet(brpc::Controller* cntl, const std::string& bucket,
   data_path::http::HttpResponseSink sink{cntl};
   auto report = http_.Get(bucket, key, range.offset, range.length, sink);
   if (!report.success()) {
+    common::metrics().http_get_fail_total << 1;
     WriteError(cntl, gateway_id_, report.error());
     return;
   }
@@ -383,16 +406,40 @@ void HttpFrontend::HandleGet(brpc::Controller* cntl, const std::string& bucket,
             std::to_string(range.offset + report.value().bytes_transferred - 1U) +
             "/" + std::to_string(head.value().content_length));
   }
+  common::metrics().http_get_total << 1;
+  common::metrics().http_get_bytes
+      << static_cast<std::int64_t>(report.value().bytes_transferred);
 }
 
 void HttpFrontend::HandlePut(brpc::Controller* cntl, const std::string& bucket,
                              const std::string& key) {
+  common::ScopedLatency latency(common::metrics().http_put_latency_us);
+
+  // 413 上限：先看 Content-Length 声明（若有），再以实际收到的 attachment.size()
+  // 兜底。两者任一超过 max_put_bytes_ 即拒。max_put_bytes_=0 表示不限。
+  const auto declared = ParseContentLengthHeader(cntl);
+  const std::uint64_t actual = cntl->request_attachment().size();
+  if (max_put_bytes_ != 0 &&
+      ((declared.has_value() && *declared > max_put_bytes_) ||
+       actual > max_put_bytes_)) {
+    common::metrics().http_put_fail_total << 1;
+    const std::uint64_t shown = declared.value_or(actual);
+    WriteError(cntl, gateway_id_,
+               common::MakeError(ErrorCode::kPayloadTooLarge,
+                                 "PUT body " + std::to_string(shown) +
+                                     " exceeds http_max_put_bytes " +
+                                     std::to_string(max_put_bytes_) +
+                                     "; use multipart upload"));
+    return;
+  }
+
   const auto payload = cntl->request_attachment().to_string();
   const std::span<const std::byte> body(
       reinterpret_cast<const std::byte*>(payload.data()), payload.size());
   auto expected_crc = ParseCrc32cHeader(cntl);
   auto report = http_.Put(bucket, key, body, expected_crc);
   if (!report.success()) {
+    common::metrics().http_put_fail_total << 1;
     WriteError(cntl, gateway_id_, report.error());
     return;
   }
@@ -409,6 +456,9 @@ void HttpFrontend::HandlePut(brpc::Controller* cntl, const std::string& bucket,
   resp["version"] = report.value().meta.version;
   resp["bytes_written"] = report.value().bytes_transferred;
   WriteJson(cntl, resp);
+  common::metrics().http_put_total << 1;
+  common::metrics().http_put_bytes
+      << static_cast<std::int64_t>(report.value().bytes_transferred);
 }
 
 // POST /v1/uploads/{bucket}/{key}  → 创建 multipart upload。
@@ -447,6 +497,21 @@ void HttpFrontend::HandleStartUpload(brpc::Controller* cntl,
 void HttpFrontend::HandleUploadPart(brpc::Controller* cntl,
                                      const std::string& upload_id,
                                      std::uint32_t part_number) {
+  // 413 上限：multipart part 与单对象 PUT 共用 http_max_put_bytes_
+  const auto declared = ParseContentLengthHeader(cntl);
+  const std::uint64_t actual = cntl->request_attachment().size();
+  if (max_put_bytes_ != 0 &&
+      ((declared.has_value() && *declared > max_put_bytes_) ||
+       actual > max_put_bytes_)) {
+    const std::uint64_t shown = declared.value_or(actual);
+    WriteError(cntl, gateway_id_,
+               common::MakeError(ErrorCode::kPayloadTooLarge,
+                                 "UploadPart body " + std::to_string(shown) +
+                                     " exceeds http_max_put_bytes " +
+                                     std::to_string(max_put_bytes_)));
+    return;
+  }
+
   const auto payload = cntl->request_attachment().to_string();
   const std::span<const std::byte> body(
       reinterpret_cast<const std::byte*>(payload.data()), payload.size());
