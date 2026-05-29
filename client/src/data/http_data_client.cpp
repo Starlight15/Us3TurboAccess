@@ -52,8 +52,9 @@ ErrorCode HttpStatusToCode(int status) {
     case brpc::HTTP_STATUS_CONFLICT:                  return ErrorCode::kStaleState;
     case 507:  // HTTP_STATUS_INSUFFICIENT_STORAGE (brpc 未定义此常量)
                                                        return ErrorCode::kCapacityExceeded;
-    case brpc::HTTP_STATUS_UNAUTHORIZED:
+    case brpc::HTTP_STATUS_UNAUTHORIZED:              return ErrorCode::kTicketInvalid;
     case brpc::HTTP_STATUS_FORBIDDEN:                return ErrorCode::kControlPlaneError;
+    case brpc::HTTP_STATUS_BAD_GATEWAY:               return ErrorCode::kBackendUnavailable;
     case brpc::HTTP_STATUS_INTERNAL_SERVER_ERROR:    return ErrorCode::kInternal;
     case brpc::HTTP_STATUS_SERVICE_UNAVAILABLE:
     case brpc::HTTP_STATUS_GATEWAY_TIMEOUT:          return ErrorCode::kBackendUnavailable;
