@@ -4,12 +4,12 @@
 |------|-----|
 | 开始日期 | 2026-05-29 |
 | 当前阶段 | 阶段 3 进行中 |
-| 总进度 | 16/38 (42%) |
-| 最新 commit | 3345900 |
+| 总进度 | 17/38 (45%) |
+| 最新 commit | cb15115 |
 
 ---
 
-## ✅ 已完成（16/38 = 42%）
+## ✅ 已完成（17/38 = 45%）
 
 ### 阶段 1：提交 P0 #2 + Phase 0（1.9d）✅
 
@@ -34,50 +34,51 @@
 
 | # | 任务 | 完成 | Commit | 说明 |
 |---|------|------|--------|------|
-| 1 | B1-Gateway (阶段1) | ✅ | 3345900 | IOBuf 直通 HttpFrontend → HttpExecutor |
-| 2 | B1-Gateway (阶段2) | ❌ | - | Backend 接口支持 IOBuf |
-| 3 | B2-Gateway | ❌ | - | CRC 单遍优化 |
-| 4 | Stream API | ❌ | - | PutObjectStream(Reader&) |
-| 5 | 自动 multipart | ❌ | - | auto_multipart_threshold |
+| 1 | B1-Gateway | ✅ | 3345900, cb15115 | IOBuf 全路径零拷贝 |
+| 2 | B2-Gateway | ❌ | - | CRC 单遍优化 |
+| 3 | Stream API | ❌ | - | PutObjectStream(Reader&) |
+| 4 | 自动 multipart | ❌ | - | auto_multipart_threshold |
 
 ---
 
-## 🔄 进行中（1 项）
+## 🎉 重大里程碑：B1-Gateway 完成
 
-### B1-Gateway IOBuf 直通（阶段 1 完成）
+### 零拷贝全路径打通
 
-**已完成：**
-- ✅ HttpFrontend → HttpExecutor 零拷贝
-- ✅ 去掉 HandlePut 的 to_string()
-- ✅ 去掉 HandleUploadPart 的 to_string()
-- ✅ IOBuf 版本的 CRC 计算
-
-**待完成（阶段 2）：**
-- ❌ Backend 接口支持 IOBuf
-- ❌ 去掉 HttpExecutor 内部的 to_string()
-
-**当前瓶颈：**
-```cpp
-// HttpExecutor::Put (IOBuf 版本)
-const auto payload = body.to_string();  // 仍需拷贝
-std::span<const std::byte> span(...);
-backend_.Write(bucket, key, span);
+**完整路径：**
 ```
+brpc IOBuf → HttpFrontend (零拷贝) 
+→ HttpExecutor (零拷贝 CRC) 
+→ Backend (零拷贝遍历 block) 
+→ MemoryDataStore (直接写入)
+```
+
+**关键改动：**
+1. ✅ HttpFrontend: 去掉 2 处 to_string()
+2. ✅ HttpExecutor: IOBuf 版本 CRC 计算
+3. ✅ Backend: IOBuf 接口 + 默认实现
+4. ✅ CompositeBackend: IOBuf 优化实现
+5. ✅ HttpExecutor: 去掉最后的 to_string()
+
+### 性能提升（预期）
+
+| 指标 | 优化前 | 优化后 | 提升 |
+|------|--------|--------|------|
+| **吞吐** | 970 MiB/s | **1.5 GB/s** | **1.5×** |
+| **延迟** | 264 ms | **< 180 ms** | **32% ↓** |
+| **CPU** | 55% | **< 40%** | **27% ↓** |
 
 ---
 
-## ⏳ 待完成（22/38 = 58%）
+## 🔄 进行中（0 项）
 
-### 阶段 3 剩余任务
+无
 
-**B1-Gateway 阶段 2（2d）：Backend IOBuf 支持**
-```
-□ 修改 IBackend::Write 接受 IOBuf
-□ 修改 IBackend::WritePart 接受 IOBuf
-□ 更新 MemoryDataStore 实现
-□ 更新 CompositeBackend 实现
-□ 去掉 HttpExecutor 内部 to_string()
-```
+---
+
+## ⏳ 待完成（21/38 = 55%）
+
+### 阶段 3 剩余任务（7d）
 
 **B2-Gateway（2d）：CRC 单遍优化**
 ```
@@ -97,6 +98,14 @@ backend_.Write(bucket, key, span);
 □ auto_multipart_threshold (16 MiB)
 ```
 
+### 阶段 4-6：P1 其他 + P2（24d）
+
+- 错误码映射补全
+- io_pool 下沉
+- ETag 内容 hash
+- 鉴权 + 限流
+- 异步化 + 超时分层
+
 ---
 
 ## 📊 进度统计
@@ -104,77 +113,62 @@ backend_.Write(bucket, key, span);
 | 优先级 | 总数 | 已完成 | 待修复 | 完成率 |
 |--------|------|--------|--------|--------|
 | **P0** | 10 | 10 | 0 | **100%** ✅ |
-| **P1** | 16 | 4 | 12 | 25% |
+| **P1** | 16 | 5 | 11 | 31% |
 | **P2** | 12 | 2 | 10 | 17% |
-| **总计** | **38** | **16** | **22** | **42%** |
+| **总计** | **38** | **17** | **21** | **45%** |
 
 ---
 
 ## 🎯 下一步行动
 
-### 立即行动：B1-Gateway 阶段 2（2d）
+### 立即行动：B2-Gateway CRC 单遍优化（2d）
 
-**目标：Backend 接口支持 IOBuf，彻底消除拷贝**
+**当前问题：**
+```cpp
+// 当前实现：两遍遍历
+auto [crc, mismatch] = VerifyCrc32c(body, expected);  // 第 1 遍
+auto write = backend_.Write(bucket, key, body);        // 第 2 遍
+```
 
-**步骤：**
-1. 修改 `backend/backend.h` 接口
-   ```cpp
-   // 添加 IOBuf 重载
-   Result<ObjectMeta> Write(bucket, key, const butil::IOBuf& body);
-   Result<std::string> WritePart(upload_id, part_number, offset, const butil::IOBuf& body);
-   ```
+**优化目标：**
+```cpp
+// 单遍实现：边算 CRC 边写入
+uint32_t crc = Crc32cInit();
+for (block : body.backing_blocks()) {
+  crc = Crc32cUpdate(crc, block.data(), block.size());
+  backend_.WriteBlock(bucket, key, offset, block);
+  offset += block.size();
+}
+crc = Crc32cFinalize(crc);
+```
 
-2. 实现 MemoryDataStore IOBuf 支持
-   ```cpp
-   // 遍历 IOBuf block 写入
-   for (block : body.backing_blocks()) {
-     memcpy(dest, block.data(), block.size());
-     dest += block.size();
-   }
-   ```
-
-3. 更新 HttpExecutor
-   ```cpp
-   // 去掉 to_string()
-   auto write = backend_.Write(bucket, key, body);  // 直接传 IOBuf
-   ```
+**预期提升：**
+- 延迟：~180 ms → **< 150 ms** (17% ↓)
+- CPU：~40% → **< 35%** (13% ↓)
 
 ---
 
 ## 📝 关键改动
 
 ### Commit 3345900: IOBuf 零拷贝（阶段 1）
+- HttpFrontend → HttpExecutor 零拷贝
+- 去掉 2 处 to_string()
+- IOBuf 版本 CRC 计算
 
-**优化前：**
-```cpp
-const auto payload = cntl->request_attachment().to_string();  // 拷贝
-const std::span<const std::byte> body(...);
-http_.Put(bucket, key, body, crc);
-```
-
-**优化后：**
-```cpp
-const auto& body = cntl->request_attachment();  // 零拷贝
-http_.Put(bucket, key, body, crc);
-```
-
-**性能提升（预期）：**
-- 吞吐：970 MiB/s → ~1.2 GB/s (1.2×)
-- 延迟：264 ms → ~200 ms (24% ↓)
-- CPU：55% → ~45% (18% ↓)
-
-**剩余瓶颈：**
-- HttpExecutor 内部仍需 to_string() 给 backend
-- 需要阶段 2 完成彻底消除
+### Commit cb15115: Backend IOBuf 支持（阶段 2）
+- Backend 接口新增 IOBuf 重载
+- CompositeBackend 优化实现
+- HttpExecutor 去掉最后的 to_string()
+- **完整零拷贝路径打通** ✅
 
 ---
 
 ## 🎉 里程碑
 
 ### ✅ P0 完成（100%）
-### 🔄 P1.1 零拷贝（40% - 阶段 1 完成）
+### ✅ B1-Gateway 完成（IOBuf 零拷贝全路径）
 
-**下一个里程碑：P1.1 完成（预计 1.5× 性能提升）**
+**下一个里程碑：B2-Gateway 完成（CRC 单遍优化）**
 
 ---
 
@@ -182,6 +176,7 @@ http_.Put(bucket, key, body, crc);
 
 | 版本 | 日期 | 摘要 |
 |------|------|------|
+| v4.0 | 2026-05-29 | B1-Gateway 完成，零拷贝全路径打通 |
 | v3.0 | 2026-05-29 | 阶段 3 启动，IOBuf 零拷贝阶段 1 完成 |
 | v2.0 | 2026-05-29 | 阶段 2 完成，P0 100% 完成 |
 | v1.0 | 2026-05-29 | 阶段 1 完成，11/38 问题已修复 |
