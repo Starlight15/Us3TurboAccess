@@ -13,6 +13,10 @@
 #include "data_path/data_path_executor.h"
 #include "us3_turbo_access/gateway/result.h"
 
+namespace butil {
+class IOBuf;
+}  // namespace butil
+
 namespace brpc {
 class Controller;
 }  // namespace brpc
@@ -84,6 +88,14 @@ class HttpExecutor final : public IDataPathExecutor {
         std::optional<std::uint32_t> expected_crc32c);
 
   /**
+   * 整对象 PUT（零拷贝版本）：接受 IOBuf，避免 to_string() 内存拷贝。
+   */
+  [[nodiscard]] Result<TransferReport>
+    Put(std::string_view bucket, std::string_view key,
+        const butil::IOBuf& body,
+        std::optional<std::uint32_t> expected_crc32c);
+
+  /**
    * Multipart 单 part PUT：写到 backend.WritePart，写完登记 part 进度
    * 给 MultipartCoordinator（与 GDS/RDMA 路径对称）。expected_crc32c 同 Put。
    * 返回 part_etag（被 client 收集后传给 CompleteUpload）。
@@ -91,6 +103,14 @@ class HttpExecutor final : public IDataPathExecutor {
   [[nodiscard]] Result<TransferReport>
     PutPart(std::string_view upload_id, std::uint32_t part_number,
             std::span<const std::byte> body,
+            std::optional<std::uint32_t> expected_crc32c);
+
+  /**
+   * Multipart 单 part PUT（零拷贝版本）：接受 IOBuf。
+   */
+  [[nodiscard]] Result<TransferReport>
+    PutPart(std::string_view upload_id, std::uint32_t part_number,
+            const butil::IOBuf& body,
             std::optional<std::uint32_t> expected_crc32c);
 
  private:

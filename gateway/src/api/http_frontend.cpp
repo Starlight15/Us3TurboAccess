@@ -497,9 +497,8 @@ void HttpFrontend::HandlePut(brpc::Controller* cntl, const std::string& bucket,
     return;
   }
 
-  const auto payload = cntl->request_attachment().to_string();
-  const std::span<const std::byte> body(
-      reinterpret_cast<const std::byte*>(payload.data()), payload.size());
+  // 零拷贝：直接传递 IOBuf，避免 to_string() 内存拷贝
+  const auto& body = cntl->request_attachment();
   auto expected_crc = ParseCrc32cHeader(cntl);
   auto report = http_.Put(bucket, key, body, expected_crc);
   if (!report.success()) {
@@ -576,9 +575,8 @@ void HttpFrontend::HandleUploadPart(brpc::Controller* cntl,
     return;
   }
 
-  const auto payload = cntl->request_attachment().to_string();
-  const std::span<const std::byte> body(
-      reinterpret_cast<const std::byte*>(payload.data()), payload.size());
+  // 零拷贝：直接传递 IOBuf
+  const auto& body = cntl->request_attachment();
   auto expected_crc = ParseCrc32cHeader(cntl);
   auto report = http_.PutPart(upload_id, part_number, body, expected_crc);
   if (!report.success()) {

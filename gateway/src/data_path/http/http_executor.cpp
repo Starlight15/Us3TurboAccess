@@ -27,6 +27,23 @@ std::pair<std::uint32_t, bool> VerifyCrc32c(
   return {actual, mismatch};
 }
 
+// CRC32C 校验（IOBuf 版本）：遍历 IOBuf block 计算 CRC。
+std::pair<std::uint32_t, bool> VerifyCrc32c(
+    const butil::IOBuf& body,
+    std::optional<std::uint32_t> expected) {
+  std::uint32_t state = common::Crc32cInit();
+  const std::size_t num_blocks = body.backing_block_num();
+
+  for (std::size_t i = 0; i < num_blocks; ++i) {
+    butil::StringPiece block = body.backing_block(i);
+    state = common::Crc32cUpdate(state, block.data(), block.size());
+  }
+
+  const std::uint32_t actual = common::Crc32cFinalize(state);
+  const bool mismatch = expected.has_value() && *expected != actual;
+  return {actual, mismatch};
+}
+
 }  // namespace
 
 HttpExecutor::HttpExecutor(backend::IBackend& backend,
@@ -140,6 +157,87 @@ Result<TransferReport> HttpExecutor::PutPart(std::string_view upload_id,
   TransferReport report;
   report.bytes_transferred = body.size();
   report.meta.etag = part_etag.value();  // part etag
+  report.crc32c = actual_crc;
+  report.has_crc32c = true;
+  return Result<TransferReport>::Success(std::move(report));
+}
+
+// IOBuf 版本的 Put：零拷贝 CRC 计算，但 backend 写入仍需临时拷贝
+// TODO(P1.2): 修改 backend 接口支持 IOBuf，彻底消除拷贝
+Result<TransferReport> HttpExecutor::Put(std::string_view bucket,
+                                         std::string_view key,
+                                         const butil::IOBuf& body,
+                                         std::optional<std::uint32_t> expected_crc32c) {
+  // 零拷贝 CRC 计算：遍历 IOBuf block
+  auto [actual_crc, mismatch] = VerifyCrc32c(body, expected_crc32c);
+  if (mismatch) {
+    return Result<TransferReport>::Failure(common::MakeError(
+        ErrorCode::kInvalidArgument,
+        "PUT crc32c mismatch: client=" + std::to_string(*expected_crc32c) +
+            " server=" + std::to_string(actual_crc)));
+  }
+
+  // 临时方案：backend 接口尚未支持 IOBuf，需要 to_string()
+  // TODO(P1.2): 修改 backend 接口接受 IOBuf
+  const auto payload = body.to_string();
+  std::span<const std::byte> span(
+      reinterpret_cast<const std::byte*>(payload.data()), payload.size());
+
+  auto write = backend_.Write(bucket, key, span);
+  if (!write.success()) {
+    return Result<TransferReport>::Failure(write.error());
+  }
+  TransferReport report;
+  report.bytes_transferred = body.size();
+  report.meta = write.value();
+  report.crc32c = actual_crc;
+  report.has_crc32c = true;
+  return Result<TransferReport>::Success(std::move(report));
+}
+
+// IOBuf 版本的 PutPart
+Result<TransferReport> HttpExecutor::PutPart(std::string_view upload_id,
+                                              std::uint32_t part_number,
+                                              const butil::IOBuf& body,
+                                              std::optional<std::uint32_t> expected_crc32c) {
+  if (multipart_ == nullptr) {
+    return Result<TransferReport>::Failure(common::MakeError(
+        ErrorCode::kInternal,
+        "PutPart called but multipart coordinator not configured"));
+  }
+
+  // 零拷贝 CRC 计算
+  auto [actual_crc, mismatch] = VerifyCrc32c(body, expected_crc32c);
+  if (mismatch) {
+    return Result<TransferReport>::Failure(common::MakeError(
+        ErrorCode::kInvalidArgument,
+        "PutPart crc32c mismatch: client=" + std::to_string(*expected_crc32c) +
+            " server=" + std::to_string(actual_crc)));
+  }
+
+  auto lookup = multipart_->Lookup(upload_id);
+  if (!lookup.success()) {
+    return Result<TransferReport>::Failure(lookup.error());
+  }
+  auto upload = lookup.value();
+
+  // 临时方案：backend 接口尚未支持 IOBuf
+  const auto payload = body.to_string();
+  std::span<const std::byte> span(
+      reinterpret_cast<const std::byte*>(payload.data()), payload.size());
+
+  auto part_etag = backend_.WritePart(upload->backend_upload_id, part_number,
+                                        /*offset=*/0, span);
+  if (!part_etag.success()) {
+    return Result<TransferReport>::Failure(part_etag.error());
+  }
+  multipart_->RegisterPart(*upload, part_number, /*offset=*/0,
+                            static_cast<std::uint64_t>(body.size()),
+                            part_etag.value());
+
+  TransferReport report;
+  report.bytes_transferred = body.size();
+  report.meta.etag = part_etag.value();
   report.crc32c = actual_crc;
   report.has_crc32c = true;
   return Result<TransferReport>::Success(std::move(report));
