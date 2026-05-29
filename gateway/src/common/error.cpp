@@ -27,6 +27,7 @@ int ToHttpStatus(ErrorCode code) noexcept {
     case ErrorCode::kTicketInvalid:       return 401;
     case ErrorCode::kBackendUnavailable:  return 502;
     case ErrorCode::kRdmaUnavailable:     return 503;
+    case ErrorCode::kMethodNotAllowed:    return 405;
     case ErrorCode::kRpcError:
     case ErrorCode::kSerializationError:
     case ErrorCode::kControlPlaneError:
@@ -34,7 +35,9 @@ int ToHttpStatus(ErrorCode code) noexcept {
     case ErrorCode::kTransportError:
     case ErrorCode::kInternal:
       return 500;
+    // No default: force compile-time check when new ErrorCode is added
   }
+  // Fallback for unknown codes (should never reach here if all cases covered)
   return 500;
 }
 

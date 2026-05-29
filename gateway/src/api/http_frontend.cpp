@@ -1,7 +1,9 @@
 #include "api/http_frontend.h"
 
+#include <chrono>
 #include <cstdint>
 #include <optional>
+#include <random>
 #include <span>
 #include <sstream>
 #include <string>
@@ -32,6 +34,57 @@ constexpr std::string_view kV1Prefix      = "/v1/objects/";
 constexpr std::string_view kV0Prefix      = "/objects/";
 constexpr std::string_view kUploadsPrefix = "/v1/uploads/";
 constexpr std::string_view kCompleteSuffix = "/complete";
+
+// Generate a simple request ID: timestamp + random hex
+std::string GenerateRequestId() {
+  static thread_local std::mt19937_64 rng(std::random_device{}());
+  auto now = std::chrono::system_clock::now().time_since_epoch();
+  auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+  auto rand = rng();
+
+  std::ostringstream oss;
+  oss << std::hex << ms << "-" << rand;
+  return oss.str();
+}
+
+// RAII helper for access log (request end)
+class ScopedAccessLog {
+ public:
+  ScopedAccessLog(brpc::Controller* cntl,
+                  std::string_view method,
+                  std::string_view path,
+                  std::string_view request_id,
+                  std::shared_ptr<spdlog::logger> logger)
+      : cntl_(cntl),
+        method_(method),
+        path_(path),
+        request_id_(request_id),
+        logger_(std::move(logger)),
+        start_(std::chrono::steady_clock::now()) {}
+
+  ~ScopedAccessLog() {
+    if (logger_ == nullptr) return;
+
+    auto elapsed = std::chrono::steady_clock::now() - start_;
+    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+    auto status = cntl_->http_response().status_code();
+    auto bytes = cntl_->response_attachment().size();
+
+    logger_->info("http {} {} status={} bytes={} elapsed_ms={} request_id={}",
+                  method_, path_, status, bytes, elapsed_ms, request_id_);
+  }
+
+  ScopedAccessLog(const ScopedAccessLog&) = delete;
+  ScopedAccessLog& operator=(const ScopedAccessLog&) = delete;
+
+ private:
+  brpc::Controller* cntl_;
+  std::string method_;
+  std::string path_;
+  std::string request_id_;
+  std::shared_ptr<spdlog::logger> logger_;
+  std::chrono::steady_clock::time_point start_;
+};
 
 std::string_view StripPrefix(std::string_view value, std::string_view prefix) {
   if (value.substr(0, prefix.size()) == prefix) {
@@ -223,10 +276,20 @@ void HttpFrontend::default_method(google::protobuf::RpcController* cntl_base,
   const auto method = cntl->http_request().method();
   const auto path = cntl->http_request().uri().path();
 
+  // Generate request_id for tracing
+  const auto request_id = GenerateRequestId();
+  cntl->http_response().SetHeader("x-fa-request-id", request_id);
+
+  // Access log: log at request start and end
   if (logger_ != nullptr) {
-    logger_->info("http {} {} from {}", brpc::HttpMethod2Str(method), path,
-                  butil::endpoint2str(cntl->remote_side()).c_str());
+    logger_->info("http {} {} from {} request_id={}",
+                  brpc::HttpMethod2Str(method), path,
+                  butil::endpoint2str(cntl->remote_side()).c_str(),
+                  request_id);
   }
+
+  // RAII: log request end (status/bytes/elapsed) in destructor
+  ScopedAccessLog access_log(cntl, brpc::HttpMethod2Str(method), path, request_id, logger_);
 
   if (method == brpc::HTTP_METHOD_GET &&
       (path == "/healthz" || path == "/v1/healthz")) {
@@ -309,8 +372,9 @@ void HttpFrontend::default_method(google::protobuf::RpcController* cntl_base,
       HandlePut(cntl, bucket, key);
       return;
     default:
+      cntl->http_response().SetHeader("Allow", "HEAD, GET, PUT");
       WriteError(cntl, gateway_id_,
-                 common::MakeError(ErrorCode::kBadRequest, "method not allowed"));
+                 common::MakeError(ErrorCode::kMethodNotAllowed, "method not allowed"));
       return;
   }
 }
