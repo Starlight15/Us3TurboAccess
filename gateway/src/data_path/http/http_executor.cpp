@@ -162,8 +162,7 @@ Result<TransferReport> HttpExecutor::PutPart(std::string_view upload_id,
   return Result<TransferReport>::Success(std::move(report));
 }
 
-// IOBuf 版本的 Put：零拷贝 CRC 计算，但 backend 写入仍需临时拷贝
-// TODO(P1.2): 修改 backend 接口支持 IOBuf，彻底消除拷贝
+// IOBuf 版本的 Put：零拷贝 CRC 计算 + 零拷贝写入
 Result<TransferReport> HttpExecutor::Put(std::string_view bucket,
                                          std::string_view key,
                                          const butil::IOBuf& body,
@@ -177,13 +176,8 @@ Result<TransferReport> HttpExecutor::Put(std::string_view bucket,
             " server=" + std::to_string(actual_crc)));
   }
 
-  // 临时方案：backend 接口尚未支持 IOBuf，需要 to_string()
-  // TODO(P1.2): 修改 backend 接口接受 IOBuf
-  const auto payload = body.to_string();
-  std::span<const std::byte> span(
-      reinterpret_cast<const std::byte*>(payload.data()), payload.size());
-
-  auto write = backend_.Write(bucket, key, span);
+  // 零拷贝写入：直接传递 IOBuf 给 backend
+  auto write = backend_.Write(bucket, key, body);
   if (!write.success()) {
     return Result<TransferReport>::Failure(write.error());
   }
@@ -195,7 +189,7 @@ Result<TransferReport> HttpExecutor::Put(std::string_view bucket,
   return Result<TransferReport>::Success(std::move(report));
 }
 
-// IOBuf 版本的 PutPart
+// IOBuf 版本的 PutPart：零拷贝 CRC 计算 + 零拷贝写入
 Result<TransferReport> HttpExecutor::PutPart(std::string_view upload_id,
                                               std::uint32_t part_number,
                                               const butil::IOBuf& body,
@@ -221,13 +215,9 @@ Result<TransferReport> HttpExecutor::PutPart(std::string_view upload_id,
   }
   auto upload = lookup.value();
 
-  // 临时方案：backend 接口尚未支持 IOBuf
-  const auto payload = body.to_string();
-  std::span<const std::byte> span(
-      reinterpret_cast<const std::byte*>(payload.data()), payload.size());
-
+  // 零拷贝写入：直接传递 IOBuf 给 backend
   auto part_etag = backend_.WritePart(upload->backend_upload_id, part_number,
-                                        /*offset=*/0, span);
+                                        /*offset=*/0, body);
   if (!part_etag.success()) {
     return Result<TransferReport>::Failure(part_etag.error());
   }

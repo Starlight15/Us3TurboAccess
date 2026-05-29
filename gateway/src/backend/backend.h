@@ -11,6 +11,10 @@
 #include "us3_turbo_access/gateway/result.h"
 #include "us3_turbo_access/gateway/types.h"
 
+namespace butil {
+class IOBuf;
+}  // namespace butil
+
 namespace us3_turbo_access::gateway::backend {
 
 /**
@@ -71,6 +75,15 @@ class IBackend {
           std::span<const std::byte> src) = 0;
 
   /**
+   * @brief Stores @p src as the full object content (零拷贝版本).
+   *
+   * 接受 IOBuf，避免 to_string() 内存拷贝。默认实现回退到 span 版本。
+   */
+  [[nodiscard]] virtual Result<ObjectMetadata>
+    Write(std::string_view bucket, std::string_view key,
+          const butil::IOBuf& src);
+
+  /**
    * @brief Writes @p src at @p offset, optionally pre-sizing to @p total_size.
    *
    * Used by chunked uploads (GDS / future RDMA). When @p total_size is empty
@@ -107,6 +120,15 @@ class IBackend {
   [[nodiscard]] virtual Result<std::string>
     WritePart(std::string_view upload_id, std::uint32_t part_number,
               std::uint64_t offset, std::span<const std::byte> src) = 0;
+
+  /**
+   * @brief 写入一个 part 的字节（零拷贝版本）。
+   *
+   * 接受 IOBuf，避免 to_string() 内存拷贝。默认实现回退到 span 版本。
+   */
+  [[nodiscard]] virtual Result<std::string>
+    WritePart(std::string_view upload_id, std::uint32_t part_number,
+              std::uint64_t offset, const butil::IOBuf& src);
 
   /**
    * @brief 提交所有 part，写最终对象索引。

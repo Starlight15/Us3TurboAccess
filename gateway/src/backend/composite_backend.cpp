@@ -4,6 +4,8 @@
 #include <chrono>
 #include <sstream>
 
+#include <butil/iobuf.h>
+
 #include "common/error.h"
 
 namespace us3_turbo_access::gateway::backend {
@@ -169,6 +171,65 @@ Result<bool> CompositeBackend::AbortMultipart(std::string_view upload_id) {
   std::scoped_lock lock(mpu_mu_);
   mpu_targets_.erase(std::string(upload_id));
   return Result<bool>::Success(true);
+}
+
+// IOBuf 零拷贝版本的 Write：遍历 IOBuf block 写入
+Result<ObjectMetadata> CompositeBackend::Write(std::string_view bucket,
+                                                std::string_view key,
+                                                const butil::IOBuf& src) {
+  // 先 Reserve 空间
+  const std::size_t total_size = src.size();
+  auto reserve = data_->Reserve(bucket, key, total_size);
+  if (!reserve.success()) {
+    return Result<ObjectMetadata>::Failure(reserve.error());
+  }
+
+  // 遍历 IOBuf block，逐块写入
+  std::uint64_t offset = 0;
+  const std::size_t num_blocks = src.backing_block_num();
+  for (std::size_t i = 0; i < num_blocks; ++i) {
+    butil::StringPiece block = src.backing_block(i);
+    std::span<const std::byte> span(
+        reinterpret_cast<const std::byte*>(block.data()), block.size());
+
+    auto wr = data_->WriteRange(bucket, key, offset, span, total_size);
+    if (!wr.success()) {
+      return Result<ObjectMetadata>::Failure(wr.error());
+    }
+    offset += block.size();
+  }
+
+  // 写索引
+  auto meta = MakeMeta(total_size);
+  auto ir = index_->PutObjectIndex(bucket, key, meta.content_length,
+                                    meta.etag, meta.version);
+  if (!ir.success()) {
+    return Result<ObjectMetadata>::Failure(ir.error());
+  }
+  return Result<ObjectMetadata>::Success(std::move(meta));
+}
+
+// IOBuf 零拷贝版本的 WritePart：遍历 IOBuf block 写入
+Result<std::string> CompositeBackend::WritePart(std::string_view upload_id,
+                                                 std::uint32_t part_number,
+                                                 std::uint64_t base_offset,
+                                                 const butil::IOBuf& src) {
+  // 遍历 IOBuf block，逐块写入
+  std::uint64_t offset = base_offset;
+  const std::size_t num_blocks = src.backing_block_num();
+  for (std::size_t i = 0; i < num_blocks; ++i) {
+    butil::StringPiece block = src.backing_block(i);
+    std::span<const std::byte> span(
+        reinterpret_cast<const std::byte*>(block.data()), block.size());
+
+    auto wr = data_->WritePart(upload_id, part_number, offset, span);
+    if (!wr.success()) {
+      return Result<std::string>::Failure(wr.error());
+    }
+    offset += block.size();
+  }
+
+  return Result<std::string>::Success(MakePartEtag(part_number, src.size()));
 }
 
 }  // namespace us3_turbo_access::gateway::backend

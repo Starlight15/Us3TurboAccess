@@ -334,7 +334,8 @@ Result<std::string> GdsExecutor::PutPart(const core::Session& session,
         "GDS PUT part exceeds 1 GiB cuObjServer limit", false));
   }
   if (length == 0U) {
-    return backend_.WritePart(upload_id, part_number, object_offset, {});
+    return backend_.WritePart(upload_id, part_number, object_offset,
+                              std::span<const std::byte>{});
   }
 
   auto server_lookup = GetServer();

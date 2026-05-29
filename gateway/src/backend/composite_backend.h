@@ -42,6 +42,11 @@ class CompositeBackend final : public IBackend {
     Write(std::string_view bucket, std::string_view key,
           std::span<const std::byte> src) override;
 
+  // IOBuf 零拷贝版本：重写以优化性能
+  [[nodiscard]] Result<ObjectMetadata>
+    Write(std::string_view bucket, std::string_view key,
+          const butil::IOBuf& src) override;
+
   [[nodiscard]] Result<ObjectMetadata>
     WriteRange(std::string_view bucket, std::string_view key,
                std::uint64_t offset, std::span<const std::byte> src,
@@ -58,6 +63,11 @@ class CompositeBackend final : public IBackend {
   [[nodiscard]] Result<std::string>
     WritePart(std::string_view upload_id, std::uint32_t part_number,
               std::uint64_t offset, std::span<const std::byte> src) override;
+
+  // IOBuf 零拷贝版本：重写以优化性能
+  [[nodiscard]] Result<std::string>
+    WritePart(std::string_view upload_id, std::uint32_t part_number,
+              std::uint64_t offset, const butil::IOBuf& src) override;
 
   [[nodiscard]] Result<ObjectMetadata>
     CompleteMultipart(std::string_view upload_id,
