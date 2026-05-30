@@ -1,26 +1,32 @@
 #pragma once
 
-#include <condition_variable>
+#include <atomic>
 #include <cstddef>
 #include <functional>
 #include <future>
 #include <memory>
-#include <mutex>
-#include <queue>
 #include <stdexcept>
-#include <thread>
 #include <type_traits>
 #include <utility>
-#include <vector>
+
+#include <bthread/bthread.h>
 
 namespace us3_turbo_access::client {
 
 /**
- * 客户端共享线程池：把同步路径（Put/Get/Head）跑在 worker 上，对外返回
- * std::future，方便上层做 fire-and-forget / 并发等待。
+ * 客户端共享任务调度器：每次 Submit 直接拉起一个 brpc bthread 执行任务，
+ * 与 brpc 网络栈共享调度，避免独立线程池的 mutex 争用 + 线程切换开销。
  *
- * 阶段 A 用：等 C5 切到 CQ 完成线程驱动时，本对象会被替换/绕过，但 *Async
- * 对外 API 不变。
+ * 与 brpc bthread 调度一致：bthread 是 M:N 协程，能在 ~固定数 worker 线程
+ * （brpc 默认 = CPU 数）上跑成千上万的轻量任务，无需自管 worker pool。
+ *
+ * 公开 Submit 签名保持不变：返回 std::future，调用者按值或按引用阻塞等待。
+ *
+ * worker_threads 参数仅用于兼容老 API：实际并发由 brpc 全局 bthread worker
+ * pool 决定（受 brpc 自带 gflag --bthread_concurrency 控制）。
+ *
+ * 注意：任务函数内若调 std::this_thread::sleep 等阻塞 syscall，仍会占住
+ * 一个 worker pthread，并非真协程让出。这一点和原 std::thread 池一致。
  */
 class ClientExecutor {
  public:
@@ -30,33 +36,45 @@ class ClientExecutor {
   ClientExecutor(const ClientExecutor&) = delete;
   ClientExecutor& operator=(const ClientExecutor&) = delete;
 
-  /** Submit 后立即返回 future；任务在某个 worker 上执行。Stop 后再调抛。*/
+  /** Submit 后立即返回 future；任务在某个 bthread 上执行。Stop 后再调抛。*/
   template <typename F>
   auto Submit(F&& fn) -> std::future<std::invoke_result_t<F>>;
 
  private:
-  void WorkerLoop();
+  // 每个 Submit 任务的 trampoline 入口，bthread_start_background 调用。
+  static void* TaskEntry(void* arg);
 
-  std::vector<std::thread>            workers_;
-  std::mutex                          mu_;
-  std::condition_variable             cv_;
-  std::queue<std::function<void()>>   tasks_;
-  bool                                stop_{false};
+  std::atomic<bool>             stop_{false};
+  std::atomic<std::int64_t>     inflight_{0};
 };
 
 template <typename F>
 auto ClientExecutor::Submit(F&& fn) -> std::future<std::invoke_result_t<F>> {
   using R = std::invoke_result_t<F>;
+  if (stop_.load(std::memory_order_acquire)) {
+    throw std::runtime_error("ClientExecutor stopped");
+  }
   auto task = std::make_shared<std::packaged_task<R()>>(std::forward<F>(fn));
   auto fut  = task->get_future();
-  {
-    std::scoped_lock lock(mu_);
-    if (stop_) {
-      throw std::runtime_error("ClientExecutor stopped");
-    }
-    tasks_.emplace([task]() { (*task)(); });
+
+  inflight_.fetch_add(1, std::memory_order_acq_rel);
+
+  // 把"运行 task + 减 inflight"打包成 std::function<void()>，堆分配后
+  // 通过裸指针交给 bthread，由 TaskEntry 在 bthread 上下文里 delete。
+  auto* boxed = new std::function<void()>(
+      [task, this]() {
+        (*task)();
+        inflight_.fetch_sub(1, std::memory_order_acq_rel);
+      });
+
+  bthread_t tid;
+  // BTHREAD_ATTR_NORMAL：与 brpc worker 共享 pthread 池，不绑核。
+  if (bthread_start_background(&tid, &BTHREAD_ATTR_NORMAL, &TaskEntry, boxed) != 0) {
+    // 启动失败：inline 跑一遍并直接销毁 boxed，让 future 仍然完成。
+    delete boxed;
+    (*task)();
+    inflight_.fetch_sub(1, std::memory_order_acq_rel);
   }
-  cv_.notify_one();
   return fut;
 }
 
