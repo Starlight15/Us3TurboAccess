@@ -17,6 +17,7 @@ class GdsTransferPath;
 class RdmaTransferPath;
 class HttpTransferPath;
 class HttpDataClient;
+class UploadCoordinator;
 
 /**
  * @brief 内部装配体：拥有所有组件实例并管理生命周期。
@@ -47,6 +48,7 @@ class ClientCore {
   [[nodiscard]] const RdmaTransferPath& rdma_transfer_path() const;
   [[nodiscard]] const HttpTransferPath& http_transfer_path() const;
   [[nodiscard]] HttpDataClient& http_data_client();
+  [[nodiscard]] UploadCoordinator& upload_coordinator();
   [[nodiscard]] ClientExecutor& async_executor() const;
 
  private:

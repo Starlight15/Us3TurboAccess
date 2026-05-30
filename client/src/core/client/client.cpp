@@ -17,6 +17,7 @@
 #include "client/src/core/http/http_transfer_path.h"
 #include "client/src/core/rdma/rdma_transfer_path.h"
 #include "client/src/core/routing/transfer_router.h"
+#include "client/src/core/upload/upload_coordinator.h"
 #include "client/src/data/gds_data_client.h"
 #include "client/src/data/http_data_client.h"
 #include "client/src/transports/gds/cuobject_client.h"
@@ -43,8 +44,7 @@ MultipartUpload::MultipartUpload(std::unique_ptr<Impl> impl)
 
 MultipartUpload::~MultipartUpload() {
   // 析构兜底：用户没 Complete 也没 Abort → best-effort 调对应通道的 AbortUpload。
-  // 注意必须按 data_path 分发：HTTP 的 upload_id 在 HTTP 端独立分配，baidu_std
-  // 的 metadata_client 不认；反之亦然。
+  // 通过 UploadCoordinator 透明分发，HTTP/GDS/RDMA 各走自己的 abort 路径。
   if (impl_ && !impl_->upload_id.empty() && impl_->core != nullptr) {
     bool need_abort = false;
     {
@@ -52,11 +52,8 @@ MultipartUpload::~MultipartUpload() {
       need_abort = !impl_->finished;
     }
     if (need_abort) {
-      if (impl_->data_path == DataPath::kHttpTcp) {
-        (void)impl_->core->http_data_client().AbortUpload(impl_->upload_id);
-      } else {
-        (void)impl_->core->metadata_client().AbortUpload(impl_->upload_id);
-      }
+      (void)impl_->core->upload_coordinator().AbortUpload(
+          impl_->data_path, impl_->upload_id);
     }
   }
 }
@@ -291,39 +288,15 @@ MultipartUpload::UploadParts(const std::vector<PartSpec>& parts,
 
 namespace {
 
-// HTTP 路径走独立的 /v1/uploads/{upload_id}/complete；其它路径走 baidu_std
-// metadata_client.CompleteUpload。两者结构体不同所以分两条路径分别组装结果。
-Result<CompleteUploadResult> CompleteUploadHttp(
-    ClientCore& core, const std::string& upload_id,
+// 把 client 公开 PartCompletion 适配成 UploadCoordinator 内部类型。
+std::vector<UploadCoordinator::PartRef> ToCoordinatorParts(
     const std::vector<PartCompletion>& parts) {
-  std::vector<HttpDataClient::PartEtag> http_parts;
-  http_parts.reserve(parts.size());
+  std::vector<UploadCoordinator::PartRef> out;
+  out.reserve(parts.size());
   for (const auto& p : parts) {
-    http_parts.push_back({p.part_number, p.etag});
+    out.push_back({p.part_number, p.etag});
   }
-  auto out = core.http_data_client().CompleteUpload(upload_id, http_parts);
-  if (!out.success()) {
-    return Result<CompleteUploadResult>::Failure(out.error());
-  }
-  CompleteUploadResult r;
-  r.etag           = out.value().etag;
-  r.version        = out.value().version;
-  r.content_length = out.value().content_length;
-  return Result<CompleteUploadResult>::Success(std::move(r));
-}
-
-Result<CompleteUploadResult> CompleteUploadControlPlane(
-    ClientCore& core, const std::string& upload_id,
-    const std::vector<PartCompletion>& parts) {
-  auto out = core.metadata_client().CompleteUpload(upload_id, parts);
-  if (!out.success()) {
-    return Result<CompleteUploadResult>::Failure(out.error());
-  }
-  CompleteUploadResult r;
-  r.etag           = out.value().etag;
-  r.version        = out.value().version;
-  r.content_length = out.value().content_length;
-  return Result<CompleteUploadResult>::Success(std::move(r));
+  return out;
 }
 
 }  // namespace
@@ -339,21 +312,23 @@ Result<CompleteUploadResult> MultipartUpload::Complete() {
     parts_copy = impl_->parts;
   }
 
+  // UploadCoordinator 透明分发：HTTP / GDS / RDMA 各走独立控制面。
+  auto coord_out = impl_->core->upload_coordinator().CompleteUpload(
+      impl_->data_path, impl_->upload_id, ToCoordinatorParts(parts_copy));
   Result<CompleteUploadResult> result =
-      (impl_->data_path == DataPath::kHttpTcp)
-          ? CompleteUploadHttp(*impl_->core, impl_->upload_id, parts_copy)
-          : CompleteUploadControlPlane(*impl_->core, impl_->upload_id,
-                                        parts_copy);
+      coord_out.success()
+          ? Result<CompleteUploadResult>::Success(CompleteUploadResult{
+                std::move(coord_out.value().etag),
+                std::move(coord_out.value().version),
+                coord_out.value().content_length})
+          : Result<CompleteUploadResult>::Failure(coord_out.error());
 
   // Complete 成功 → finished=true，析构不再 abort。
   // Complete 失败 → best-effort abort 释放 server 端 upload（与 ~MultipartUpload
   // 走同一通道）；但仍把 finished 置 true，避免重复 abort 把用户错误覆盖掉。
   if (!result.success()) {
-    if (impl_->data_path == DataPath::kHttpTcp) {
-      (void)impl_->core->http_data_client().AbortUpload(impl_->upload_id);
-    } else {
-      (void)impl_->core->metadata_client().AbortUpload(impl_->upload_id);
-    }
+    (void)impl_->core->upload_coordinator().AbortUpload(impl_->data_path,
+                                                         impl_->upload_id);
   }
   {
     std::scoped_lock lock(impl_->mu);
@@ -369,10 +344,8 @@ Result<bool> MultipartUpload::Abort() {
       return Result<bool>::Success(true);
     }
   }
-  Result<bool> out =
-      (impl_->data_path == DataPath::kHttpTcp)
-          ? impl_->core->http_data_client().AbortUpload(impl_->upload_id)
-          : impl_->core->metadata_client().AbortUpload(impl_->upload_id);
+  Result<bool> out = impl_->core->upload_coordinator().AbortUpload(
+      impl_->data_path, impl_->upload_id);
   {
     std::scoped_lock lock(impl_->mu);
     impl_->finished = true;
@@ -476,29 +449,16 @@ Result<MultipartUpload> Client::StartUpload(const ObjectId& object,
   impl->object    = object;
   impl->data_path = path;
 
-  if (path == DataPath::kHttpTcp) {
-    // HTTP 路径：StartUpload 直接走 HTTP /v1/uploads/{bucket}/{key}，
-    // 不走 control plane baidu_std。
-    auto out = core_->http_data_client().StartUpload(
-        object, static_cast<std::uint64_t>(expected_total_size), idempotency_key);
-    if (!out.success()) {
-      return Result<MultipartUpload>::Failure(out.error());
-    }
-    impl->upload_id     = std::move(out.value().upload_id);
-    impl->max_part_size = out.value().max_part_size;
-  } else {
-    StartUploadOptions opts;
-    opts.object              = object;
-    opts.expected_total_size = expected_total_size;
-    opts.data_path           = path;  // 仅 GDS / RDMA
-    opts.idempotency_key     = idempotency_key;
-    auto out = core_->metadata_client().StartUpload(opts);
-    if (!out.success()) {
-      return Result<MultipartUpload>::Failure(out.error());
-    }
-    impl->upload_id     = std::move(out.value().upload_id);
-    impl->max_part_size = out.value().max_part_size;
+  // UploadCoordinator 透明分发：HTTP 走 /v1/uploads/{bucket}/{key}（HTTP REST），
+  // GDS/RDMA 走 ControlPlaneService::StartUpload（baidu_std）。
+  // 两条逻辑各自独立分配 upload_id，互不认。
+  auto out = core_->upload_coordinator().StartUpload(
+      path, object, expected_total_size, idempotency_key);
+  if (!out.success()) {
+    return Result<MultipartUpload>::Failure(out.error());
   }
+  impl->upload_id     = std::move(out.value().upload_id);
+  impl->max_part_size = out.value().max_part_size;
   return Result<MultipartUpload>::Success(MultipartUpload(std::move(impl)));
 }
 

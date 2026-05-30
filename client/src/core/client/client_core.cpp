@@ -12,6 +12,7 @@
 #include "client/src/core/http/http_transfer_path.h"
 #include "client/src/core/rdma/rdma_transfer_path.h"
 #include "client/src/core/routing/transfer_router.h"
+#include "client/src/core/upload/upload_coordinator.h"
 #include "client/src/data/gds_data_client.h"
 #include "client/src/data/http_data_client.h"
 #include "client/src/data/rdma_data_plane_client.h"
@@ -60,6 +61,9 @@ struct ClientCore::Impl {
   RdmaTransferPath    rdma_executor;
   HttpTransferPath    http_executor;
   TransferRouter      transfer_router;
+  // upload_coordinator 必须在 metadata_client + http_data_client 之后构造
+  // （它持有它们的引用），但又在 async_executor 之前；声明顺序自然满足。
+  std::unique_ptr<UploadCoordinator> upload_coordinator;
   // async_executor 必须声明在依赖项之后：析构按声明逆序，先析构 executor
   // 才能 join 完所有 worker，避免 worker 在 transfer_router 等已销毁后访问。
   std::unique_ptr<ClientExecutor> async_executor;
@@ -104,6 +108,10 @@ Result<bool> ClientCore::Initialize() {
   }
   impl_->async_executor = std::make_unique<ClientExecutor>(workers);
 
+  // UploadCoordinator 不持有 I/O 资源，仅依赖 metadata_client + http_data_client；
+  // 在它们 Initialize 之后构造即可。
+  impl_->upload_coordinator = std::make_unique<UploadCoordinator>(*this);
+
   impl_->initialized = true;
   return Result<bool>::Success(true);
 }
@@ -111,6 +119,7 @@ Result<bool> ClientCore::Initialize() {
 void ClientCore::Shutdown() {
   // 先关掉 executor，确保所有 *Async 任务跑完再拆下层组件。
   impl_->async_executor.reset();
+  impl_->upload_coordinator.reset();
   impl_->metadata_client.Shutdown();
   impl_->gds_data_client.Shutdown();
   impl_->rdma_data_plane_client.Shutdown();
@@ -133,6 +142,7 @@ const GdsTransferPath& ClientCore::gds_transfer_path() const { return impl_->gds
 const RdmaTransferPath& ClientCore::rdma_transfer_path() const { return impl_->rdma_executor; }
 const HttpTransferPath& ClientCore::http_transfer_path() const { return impl_->http_executor; }
 HttpDataClient& ClientCore::http_data_client() { return impl_->http_data_client; }
+UploadCoordinator& ClientCore::upload_coordinator() { return *impl_->upload_coordinator; }
 ClientExecutor& ClientCore::async_executor() const { return *impl_->async_executor; }
 
 }  // namespace us3_turbo_access::client
