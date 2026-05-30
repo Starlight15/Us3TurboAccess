@@ -2,6 +2,7 @@
 
 #include "client/src/core/common/errors.h"
 #include "client/src/core/contracts/request_builder.h"
+#include "client/src/core/routing/retry_policy.h"
 
 namespace us3_turbo_access::client {
 namespace {
@@ -67,13 +68,15 @@ Result<TransferOutcome> GdsTransferPath::PutObject(const RequestOptions& request
     return Result<TransferOutcome>::Failure(MakeGdsUnsupportedError());
   }
 
-  auto session = OpenSession(context_, OperationType::kPut, request, buffer);
-  if (!session.success()) {
-    return Result<TransferOutcome>::Failure(session.error());
-  }
-
-  return context_.cuobj_client.ExecutePut(context_.options, context_.data_client, session.value(),
-                                          request, buffer);
+  // PUT 幂等覆写：retryable 错误自动重试，每次重做 OpenSession + ExecutePut。
+  return RetryIfRetryable(DefaultRetryPolicy(), [&]() -> Result<TransferOutcome> {
+    auto session = OpenSession(context_, OperationType::kPut, request, buffer);
+    if (!session.success()) {
+      return Result<TransferOutcome>::Failure(session.error());
+    }
+    return context_.cuobj_client.ExecutePut(context_.options, context_.data_client,
+                                              session.value(), request, buffer);
+  });
 }
 
 // Multipart 单 part：与整对象 PutObject 同流程，但 expected_size=0 跳过
@@ -86,29 +89,31 @@ Result<TransferOutcome> GdsTransferPath::PutObjectPart(
     return Result<TransferOutcome>::Failure(MakeGdsUnsupportedError());
   }
 
-  // expected_size = 0：OpenSession 中 length 不带，gateway 不做整对象 Reserve。
-  // 落地走 ExecutePutPart 而非 ExecutePut（part_etag 取自 multipart 路径）。
-  auto registration =
-      context_.memory_registry.Register(OperationType::kPut, buffer);
-  if (!registration.success()) {
-    return Result<TransferOutcome>::Failure(registration.error());
-  }
+  // 单 part 幂等（同 part_number 覆盖），可重试。
+  return RetryIfRetryable(DefaultRetryPolicy(), [&]() -> Result<TransferOutcome> {
+    // expected_size = 0：OpenSession 中 length 不带，gateway 不做整对象 Reserve。
+    auto registration =
+        context_.memory_registry.Register(OperationType::kPut, buffer);
+    if (!registration.success()) {
+      return Result<TransferOutcome>::Failure(registration.error());
+    }
 
-  auto open_request = MakeSessionHandshake(context_.options, SessionPlan{
-      .operation = OperationType::kPut,
-      .request = request,
-      .buffer_type = buffer.type,
-      .path = DataPath::kGdsCuObject,
+    auto open_request = MakeSessionHandshake(context_.options, SessionPlan{
+        .operation = OperationType::kPut,
+        .request = request,
+        .buffer_type = buffer.type,
+        .path = DataPath::kGdsCuObject,
+    });
+    auto open_response = context_.metadata_client.OpenTransferSession(open_request);
+    if (!open_response.success()) {
+      return Result<TransferOutcome>::Failure(open_response.error());
+    }
+    auto session = ImportSession(open_response.value());
+
+    return context_.cuobj_client.ExecutePutPart(
+        context_.options, context_.data_client, session, request, buffer,
+        upload_id, part_number);
   });
-  auto open_response = context_.metadata_client.OpenTransferSession(open_request);
-  if (!open_response.success()) {
-    return Result<TransferOutcome>::Failure(open_response.error());
-  }
-  auto session = ImportSession(open_response.value());
-
-  return context_.cuobj_client.ExecutePutPart(
-      context_.options, context_.data_client, session, request, buffer,
-      upload_id, part_number);
 }
 
 }  // namespace us3_turbo_access::client

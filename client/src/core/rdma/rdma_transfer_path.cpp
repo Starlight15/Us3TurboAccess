@@ -6,6 +6,7 @@
 
 #include "client/src/core/common/errors.h"
 #include "client/src/core/contracts/request_builder.h"
+#include "client/src/core/routing/retry_policy.h"
 #include "client/src/transports/rdma/host_memory_registry.h"
 #include "client/src/transports/rdma/rdma_cm_connection.h"
 #include "client/src/transports/rdma/rdma_completion_driver.h"
@@ -249,31 +250,36 @@ Result<TransferOutcome> RdmaTransferPath::PutObject(const RequestOptions& reques
   auto pre = PreflightRdma(available(), buffer.type);
   if (!pre.success()) return Result<TransferOutcome>::Failure(pre.error());
 
-  auto prepared = PrepareAndWrite(options_, metadata_client_, data_plane_client_,
-                                    *pool_, *driver_, request, buffer,
-                                    /*is_multipart_part=*/false);
-  if (!prepared.success()) {
-    return Result<TransferOutcome>::Failure(prepared.error());
-  }
+  // PUT 是幂等覆写（gateway 按 bucket/key 整体覆盖），retryable 错误自动重试。
+  // 每次尝试都重做 PrepareAndWrite（OpenSession+WRITE）：session_id / MR 都是
+  // 一次性的，重试必须重新走完整流程。
+  return RetryIfRetryable(DefaultRetryPolicy(), [&]() -> Result<TransferOutcome> {
+    auto prepared = PrepareAndWrite(options_, metadata_client_, data_plane_client_,
+                                      *pool_, *driver_, request, buffer,
+                                      /*is_multipart_part=*/false);
+    if (!prepared.success()) {
+      return Result<TransferOutcome>::Failure(prepared.error());
+    }
 
-  auto commit = data_plane_client_.CommitObject(
-      prepared.value().session_id,
-      static_cast<std::uint64_t>(buffer.size));
-  if (!commit.success()) {
-    (void)data_plane_client_.AbortSession(prepared.value().session_id);
-    return Result<TransferOutcome>::Failure(commit.error());
-  }
+    auto commit = data_plane_client_.CommitObject(
+        prepared.value().session_id,
+        static_cast<std::uint64_t>(buffer.size));
+    if (!commit.success()) {
+      (void)data_plane_client_.AbortSession(prepared.value().session_id);
+      return Result<TransferOutcome>::Failure(commit.error());
+    }
 
-  TransferOutcome outcome;
-  outcome.selected_path     = DataPath::kNativeRdma;
-  outcome.request_id        = std::move(prepared.value().request_id);
-  outcome.session_id        = std::move(prepared.value().session_id);
-  outcome.gateway_id        = std::move(prepared.value().gateway_id);
-  outcome.transfer_status   = "completed";
-  outcome.etag              = commit.value().etag;
-  outcome.version           = commit.value().version;
-  outcome.bytes_transferred = buffer.size;
-  return Result<TransferOutcome>::Success(std::move(outcome));
+    TransferOutcome outcome;
+    outcome.selected_path     = DataPath::kNativeRdma;
+    outcome.request_id        = std::move(prepared.value().request_id);
+    outcome.session_id        = std::move(prepared.value().session_id);
+    outcome.gateway_id        = std::move(prepared.value().gateway_id);
+    outcome.transfer_status   = "completed";
+    outcome.etag              = commit.value().etag;
+    outcome.version           = commit.value().version;
+    outcome.bytes_transferred = buffer.size;
+    return Result<TransferOutcome>::Success(std::move(outcome));
+  });
 }
 
 // Multipart 单 part 上传：流程完全等同 PutObject，区别只在 Commit RPC：
@@ -290,30 +296,33 @@ Result<TransferOutcome> RdmaTransferPath::PutObjectPart(
         "PutObjectPart 需要非空 upload_id 与 part_number>=1"));
   }
 
-  auto prepared = PrepareAndWrite(options_, metadata_client_, data_plane_client_,
-                                    *pool_, *driver_, request, buffer,
-                                    /*is_multipart_part=*/true);
-  if (!prepared.success()) {
-    return Result<TransferOutcome>::Failure(prepared.error());
-  }
+  // 单 part 上传幂等（同 part_number 覆盖），可重试。
+  return RetryIfRetryable(DefaultRetryPolicy(), [&]() -> Result<TransferOutcome> {
+    auto prepared = PrepareAndWrite(options_, metadata_client_, data_plane_client_,
+                                      *pool_, *driver_, request, buffer,
+                                      /*is_multipart_part=*/true);
+    if (!prepared.success()) {
+      return Result<TransferOutcome>::Failure(prepared.error());
+    }
 
-  auto commit = data_plane_client_.CommitPart(
-      prepared.value().session_id, upload_id, part_number,
-      static_cast<std::uint64_t>(buffer.size));
-  if (!commit.success()) {
-    (void)data_plane_client_.AbortSession(prepared.value().session_id);
-    return Result<TransferOutcome>::Failure(commit.error());
-  }
+    auto commit = data_plane_client_.CommitPart(
+        prepared.value().session_id, upload_id, part_number,
+        static_cast<std::uint64_t>(buffer.size));
+    if (!commit.success()) {
+      (void)data_plane_client_.AbortSession(prepared.value().session_id);
+      return Result<TransferOutcome>::Failure(commit.error());
+    }
 
-  TransferOutcome outcome;
-  outcome.selected_path     = DataPath::kNativeRdma;
-  outcome.request_id        = std::move(prepared.value().request_id);
-  outcome.session_id        = std::move(prepared.value().session_id);
-  outcome.gateway_id        = std::move(prepared.value().gateway_id);
-  outcome.transfer_status   = "completed";
-  outcome.etag              = commit.value().part_etag;
-  outcome.bytes_transferred = buffer.size;
-  return Result<TransferOutcome>::Success(std::move(outcome));
+    TransferOutcome outcome;
+    outcome.selected_path     = DataPath::kNativeRdma;
+    outcome.request_id        = std::move(prepared.value().request_id);
+    outcome.session_id        = std::move(prepared.value().session_id);
+    outcome.gateway_id        = std::move(prepared.value().gateway_id);
+    outcome.transfer_status   = "completed";
+    outcome.etag              = commit.value().part_etag;
+    outcome.bytes_transferred = buffer.size;
+    return Result<TransferOutcome>::Success(std::move(outcome));
+  });
 }
 
 }  // namespace us3_turbo_access::client
