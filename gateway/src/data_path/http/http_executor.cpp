@@ -68,6 +68,9 @@ Result<TransferReport> HttpExecutor::Get(std::string_view bucket,
     return Result<TransferReport>::Success(std::move(report));
   }
 
+  // 边读边算 CRC32C：每个 chunk 一次 backend.Read + Crc32cUpdate + append。
+  // 不需要额外遍历 buffer，单遍完成读 + 校验 + 写响应。
+  std::uint32_t crc_state = common::Crc32cInit();
   std::vector<std::byte> buffer(std::min<std::size_t>(
       kChunkBytes, static_cast<std::size_t>(length)));
   std::uint64_t cursor = offset;
@@ -83,6 +86,8 @@ Result<TransferReport> HttpExecutor::Get(std::string_view bucket,
     if (n == 0U) {
       break;
     }
+    // 单遍：算 CRC + 写响应同时进行。
+    crc_state = common::Crc32cUpdate(crc_state, buffer.data(), n);
     if (sink.controller != nullptr) {
       sink.controller->response_attachment().append(
           static_cast<const void*>(buffer.data()), n);
@@ -94,6 +99,8 @@ Result<TransferReport> HttpExecutor::Get(std::string_view bucket,
       break;  // backend returned a short read - treat as EOF.
     }
   }
+  report.crc32c = common::Crc32cFinalize(crc_state);
+  report.has_crc32c = true;
   return Result<TransferReport>::Success(std::move(report));
 }
 

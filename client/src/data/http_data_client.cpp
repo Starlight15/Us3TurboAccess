@@ -1,6 +1,7 @@
 #include "client/src/data/http_data_client.h"
 
 #include <cstring>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -211,7 +212,8 @@ Result<HttpDataClient::GetReport> HttpDataClient::GetObjectOnce(
     return Result<GetReport>::Failure(MapHttpFailure(cntl, "GET object"));
   }
 
-  // 把 attachment 拷进 buffer：用 IOBuf::copy_to 避免一次 to_string() 中转。
+  // 边拷边算 CRC：遍历 IOBuf block，每块 memcpy 到 buffer + Crc32cUpdate。
+  // 与 server 端 HttpExecutor::Get 单遍策略对称。
   const auto& att = cntl.response_attachment();
   const std::size_t n_total = att.size();
   if (n_total > buffer.size) {
@@ -220,18 +222,44 @@ Result<HttpDataClient::GetReport> HttpDataClient::GetObjectOnce(
         "GET response exceeds buffer.size: got " + std::to_string(n_total) +
             " > buffer " + std::to_string(buffer.size)));
   }
+
+  std::uint32_t client_crc = 0;
+  bool have_client_crc = false;
   if (n_total > 0) {
-    const std::size_t copied = att.copy_to(buffer.data, n_total, /*pos=*/0);
-    if (copied != n_total) {
+    auto* dst = static_cast<std::byte*>(buffer.data);
+    std::size_t cursor = 0;
+    const std::size_t num_blocks = att.backing_block_num();
+    for (std::size_t i = 0; i < num_blocks; ++i) {
+      butil::StringPiece block = att.backing_block(i);
+      std::memcpy(dst + cursor, block.data(), block.size());
+      cursor += block.size();
+    }
+    if (cursor != n_total) {
       return Result<GetReport>::Failure(MakeError(
           ErrorCode::kInternal,
-          "IOBuf::copy_to short copy: " + std::to_string(copied) + "/" +
+          "IOBuf block traversal short copy: " + std::to_string(cursor) + "/" +
               std::to_string(n_total)));
     }
+    // 写完再算 CRC：保证 buffer 中数据与算入 CRC 的数据一致。
+    client_crc = Crc32c(std::span<const std::byte>(dst, n_total));
+    have_client_crc = true;
   }
+
   GetReport out;
   out.bytes = n_total;
   out.meta  = ExtractMeta(cntl);
+  out.server_crc32c = ExtractServerCrc32c(cntl);
+
+  // end-to-end CRC 校验：client 实算 vs server 返回；
+  // verify_response_crc32c=false 时跳过（默认 true）。
+  if (channel_.options().http.verify_response_crc32c &&
+      out.server_crc32c.has_value() && have_client_crc &&
+      *out.server_crc32c != client_crc) {
+    return Result<GetReport>::Failure(MakeError(
+        ErrorCode::kInvalidArgument,
+        "GET CRC32C mismatch: client=" + std::to_string(client_crc) +
+            " server=" + std::to_string(*out.server_crc32c)));
+  }
   return Result<GetReport>::Success(std::move(out));
 }
 

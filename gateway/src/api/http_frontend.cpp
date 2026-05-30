@@ -463,6 +463,11 @@ void HttpFrontend::HandleGet(brpc::Controller* cntl, const std::string& bucket,
       "Content-Length", std::to_string(report.value().bytes_transferred));
   cntl->http_response().SetHeader("ETag", head.value().etag);
   cntl->http_response().SetHeader("x-fa-version", head.value().version);
+  // 写 server 算出的 CRC32C 让 client 做 end-to-end 校验（与 PUT 路径对称）。
+  if (report.value().has_crc32c) {
+    cntl->http_response().SetHeader(
+        "x-amz-checksum-crc32c", EncodeCrc32cBase64(report.value().crc32c));
+  }
   if (range.partial && report.value().bytes_transferred != 0U) {
     cntl->http_response().SetHeader(
         "Content-Range",

@@ -38,6 +38,9 @@ class HttpDataClient {
   struct GetReport {
     std::size_t    bytes{0};   // 实际写入 buffer 的字节数
     ObjectMetadata meta;        // ETag / Content-Length / x-fa-version + headers
+    /** server 端实算 CRC32C：成功解出 x-amz-checksum-crc32c 响应头时填值，
+     *  否则 nullopt。用于 client 端做 end-to-end 数据完整性校验。 */
+    std::optional<std::uint32_t>   server_crc32c;
   };
   struct PutReport {
     std::size_t                    bytes{0};
