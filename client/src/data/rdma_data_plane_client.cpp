@@ -3,29 +3,33 @@
 #include <brpc/controller.h>
 
 #include "client/src/core/common/brpc_channel.h"  // ApplyRequestTimeout
+#include "client/src/core/common/channel_registry.h"
 #include "client/src/core/common/errors.h"
 
 namespace us3_turbo_access::client {
 
-RdmaDataPlaneClient::RdmaDataPlaneClient(const ClientOptions& options)
-    : channel_(options) {}
+RdmaDataPlaneClient::RdmaDataPlaneClient(ChannelRegistry& registry,
+                                          const ClientOptions& options)
+    : registry_(registry), options_(options) {}
 
 Result<bool> RdmaDataPlaneClient::Initialize() {
   if (initialized()) return Result<bool>::Success(true);
-  auto init = channel_.Initialize();
-  if (!init.success()) return init;
+  auto* ch = registry_.baidu_std();
+  if (ch == nullptr) {
+    return Result<bool>::Failure(MakeInvalidArgument(
+        "RdmaDataPlaneClient: shared baidu_std channel is not initialized"));
+  }
   stub_ = std::make_unique<
-      us3_turbo_access::gateway::RdmaDataPlaneService_Stub>(channel_.channel());
+      us3_turbo_access::gateway::RdmaDataPlaneService_Stub>(ch);
   return Result<bool>::Success(true);
 }
 
 void RdmaDataPlaneClient::Shutdown() {
   stub_.reset();
-  channel_.Shutdown();
 }
 
 bool RdmaDataPlaneClient::initialized() const {
-  return channel_.ready() && stub_ != nullptr;
+  return stub_ != nullptr;
 }
 
 Result<RdmaDiscoverInfo> RdmaDataPlaneClient::DiscoverEndpoint(
@@ -35,7 +39,7 @@ Result<RdmaDiscoverInfo> RdmaDataPlaneClient::DiscoverEndpoint(
         MakeNotInitialized("RDMA data plane client"));
   }
   brpc::Controller controller;
-  ApplyRequestTimeout(controller, channel_.options());
+  ApplyRequestTimeout(controller, options_);
   us3_turbo_access::gateway::RdmaDiscoverRequest req;
   req.set_session_id(session_id);
   us3_turbo_access::gateway::RdmaDiscoverResponse resp;
@@ -59,7 +63,7 @@ Result<RdmaBindInfo> RdmaDataPlaneClient::BindSessionToConnection(
         MakeNotInitialized("RDMA data plane client"));
   }
   brpc::Controller controller;
-  ApplyRequestTimeout(controller, channel_.options());
+  ApplyRequestTimeout(controller, options_);
   us3_turbo_access::gateway::RdmaBindRequest req;
   req.set_session_id(session_id);
   req.set_conn_token(conn_token);
@@ -82,7 +86,7 @@ Result<RdmaCommitInfo> RdmaDataPlaneClient::CommitObject(
     return Result<RdmaCommitInfo>::Failure(MakeNotInitialized("RDMA data plane client"));
   }
   brpc::Controller controller;
-  ApplyRequestTimeout(controller, channel_.options());
+  ApplyRequestTimeout(controller, options_);
   us3_turbo_access::gateway::RdmaCommitRequest req;
   req.set_session_id(session_id);
   req.set_bytes_transferred(bytes_transferred);
@@ -105,7 +109,7 @@ Result<bool> RdmaDataPlaneClient::AbortSession(
     return Result<bool>::Failure(MakeNotInitialized("RDMA data plane client"));
   }
   brpc::Controller controller;
-  ApplyRequestTimeout(controller, channel_.options());
+  ApplyRequestTimeout(controller, options_);
   us3_turbo_access::gateway::RdmaAbortRequest req;
   req.set_session_id(session_id);
   us3_turbo_access::gateway::RdmaAbortResponse resp;
@@ -125,7 +129,7 @@ Result<RdmaCommitPartInfo> RdmaDataPlaneClient::CommitPart(
     return Result<RdmaCommitPartInfo>::Failure(MakeNotInitialized("RDMA data plane client"));
   }
   brpc::Controller controller;
-  ApplyRequestTimeout(controller, channel_.options());
+  ApplyRequestTimeout(controller, options_);
   us3_turbo_access::gateway::RdmaCommitPartRequest req;
   req.set_session_id(session_id);
   req.set_upload_id(upload_id);

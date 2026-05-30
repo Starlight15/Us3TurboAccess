@@ -31,13 +31,16 @@ struct RdmaCommitPartInfo {
   std::string part_etag;
 };
 
+class ChannelRegistry;
+
 /**
  * 客户端调 RdmaDataPlaneService 的薄 stub。
- * 与 MetadataClient / GdsDataClient 平行；独立 brpc 通道复用。
+ * 与 MetadataClient / GdsDataClient 平行；本期共用 ChannelRegistry 的 baidu_std Channel。
  */
 class RdmaDataPlaneClient {
  public:
-  explicit RdmaDataPlaneClient(const ClientOptions& options);
+  /** 接受共享 baidu_std Channel；ChannelRegistry 提供。 */
+  RdmaDataPlaneClient(ChannelRegistry& registry, const ClientOptions& options);
 
   [[nodiscard]] Result<bool> Initialize();
   void Shutdown();
@@ -62,8 +65,11 @@ class RdmaDataPlaneClient {
   [[nodiscard]] Result<bool>
     AbortSession(const std::string& session_id) const;
 
+  [[nodiscard]] const ClientOptions& options() const noexcept { return options_; }
+
  private:
-  BrpcChannel channel_;
+  ChannelRegistry&     registry_;
+  const ClientOptions& options_;
   std::unique_ptr<us3_turbo_access::gateway::RdmaDataPlaneService_Stub> stub_;
 };
 

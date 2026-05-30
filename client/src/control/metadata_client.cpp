@@ -4,30 +4,34 @@
 
 #include <brpc/controller.h>
 
+#include "client/src/core/common/channel_registry.h"
 #include "client/src/core/common/errors.h"
 
 namespace us3_turbo_access::client {
 
-MetadataClient::MetadataClient(const ClientOptions& options) : channel_(options) {}
+MetadataClient::MetadataClient(ChannelRegistry& registry,
+                                const ClientOptions& options)
+    : registry_(registry), options_(options) {}
 
 Result<bool> MetadataClient::Initialize() {
   if (initialized()) {
     return Result<bool>::Success(true);
   }
-  auto init = channel_.Initialize();
-  if (!init.success()) {
-    return init;
+  auto* ch = registry_.baidu_std();
+  if (ch == nullptr) {
+    return Result<bool>::Failure(MakeInvalidArgument(
+        "MetadataClient: shared baidu_std channel is not initialized"));
   }
-  stub_ = std::make_unique<us3_turbo_access::gateway::ControlPlaneService_Stub>(channel_.channel());
+  stub_ = std::make_unique<us3_turbo_access::gateway::ControlPlaneService_Stub>(ch);
   return Result<bool>::Success(true);
 }
 
 void MetadataClient::Shutdown() {
+  // 共享 Channel：本类只析构 stub，channel 由 ChannelRegistry 管。
   stub_.reset();
-  channel_.Shutdown();
 }
 
-bool MetadataClient::initialized() const { return channel_.ready() && stub_ != nullptr; }
+bool MetadataClient::initialized() const { return stub_ != nullptr; }
 
 Result<us3_turbo_access::gateway::OpenSessionResponse>
 MetadataClient::OpenTransferSession(const SessionOpening& request) const {
@@ -69,7 +73,7 @@ Result<ObjectMetadata> MetadataClient::HeadObject(const ObjectId& object) const 
     return Result<ObjectMetadata>::Failure(MakeNotInitialized("Metadata client"));
   }
 
-  const ClientOptions& options = channel_.options();
+  const ClientOptions& options = options_;
   const RpcCallMetadata context{.client_id = options.client_id,
                                   .bearer_token = options.bearer_token,
                                   .default_headers = options.default_headers,
@@ -105,7 +109,7 @@ Result<StartUploadOutcome> MetadataClient::StartUpload(
   if (!initialized()) {
     return Result<StartUploadOutcome>::Failure(MakeNotInitialized("Metadata client"));
   }
-  const ClientOptions& options = channel_.options();
+  const ClientOptions& options = options_;
   const RpcCallMetadata context{.client_id = options.client_id,
                                   .bearer_token = options.bearer_token,
                                   .default_headers = options.default_headers,
@@ -138,7 +142,7 @@ Result<CompleteUploadOutcome> MetadataClient::CompleteUpload(
   if (!initialized()) {
     return Result<CompleteUploadOutcome>::Failure(MakeNotInitialized("Metadata client"));
   }
-  const ClientOptions& options = channel_.options();
+  const ClientOptions& options = options_;
   const RpcCallMetadata context{.client_id = options.client_id,
                                   .bearer_token = options.bearer_token,
                                   .default_headers = options.default_headers,
@@ -171,7 +175,7 @@ Result<bool> MetadataClient::AbortUpload(const std::string& upload_id) const {
   if (!initialized()) {
     return Result<bool>::Failure(MakeNotInitialized("Metadata client"));
   }
-  const ClientOptions& options = channel_.options();
+  const ClientOptions& options = options_;
   const RpcCallMetadata context{.client_id = options.client_id,
                                   .bearer_token = options.bearer_token,
                                   .default_headers = options.default_headers,

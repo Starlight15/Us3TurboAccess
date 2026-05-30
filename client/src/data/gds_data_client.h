@@ -10,9 +10,12 @@
 
 namespace us3_turbo_access::client {
 
+class ChannelRegistry;
+
 class GdsDataClient {
  public:
-  explicit GdsDataClient(const ClientOptions& options);
+  /** 接受共享 baidu_std Channel；ChannelRegistry 提供。 */
+  GdsDataClient(ChannelRegistry& registry, const ClientOptions& options);
 
   [[nodiscard]] Result<bool> Initialize();
   void Shutdown();
@@ -21,8 +24,11 @@ class GdsDataClient {
   [[nodiscard]] Result<us3_turbo_access::gateway::GdsChunkResponse> GdsChunk(
       const ChunkOp& request) const;
 
+  [[nodiscard]] const ClientOptions& options() const noexcept { return options_; }
+
  private:
-  BrpcChannel channel_;
+  ChannelRegistry&     registry_;
+  const ClientOptions& options_;
   std::unique_ptr<us3_turbo_access::gateway::ControlPlaneService_Stub> stub_;
 };
 

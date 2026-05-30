@@ -4,30 +4,33 @@
 
 #include <brpc/controller.h>
 
+#include "client/src/core/common/brpc_channel.h"  // ApplyRequestHeaders
+#include "client/src/core/common/channel_registry.h"
 #include "client/src/core/common/errors.h"
 
 namespace us3_turbo_access::client {
 
-GdsDataClient::GdsDataClient(const ClientOptions& options) : channel_(options) {}
+GdsDataClient::GdsDataClient(ChannelRegistry& registry, const ClientOptions& options)
+    : registry_(registry), options_(options) {}
 
 Result<bool> GdsDataClient::Initialize() {
   if (initialized()) {
     return Result<bool>::Success(true);
   }
-  auto init = channel_.Initialize();
-  if (!init.success()) {
-    return init;
+  auto* ch = registry_.baidu_std();
+  if (ch == nullptr) {
+    return Result<bool>::Failure(MakeInvalidArgument(
+        "GdsDataClient: shared baidu_std channel is not initialized"));
   }
-  stub_ = std::make_unique<us3_turbo_access::gateway::ControlPlaneService_Stub>(channel_.channel());
+  stub_ = std::make_unique<us3_turbo_access::gateway::ControlPlaneService_Stub>(ch);
   return Result<bool>::Success(true);
 }
 
 void GdsDataClient::Shutdown() {
   stub_.reset();
-  channel_.Shutdown();
 }
 
-bool GdsDataClient::initialized() const { return channel_.ready() && stub_ != nullptr; }
+bool GdsDataClient::initialized() const { return stub_ != nullptr; }
 
 Result<us3_turbo_access::gateway::GdsChunkResponse> GdsDataClient::GdsChunk(
     const ChunkOp& request) const {

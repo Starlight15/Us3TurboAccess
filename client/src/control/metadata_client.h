@@ -36,9 +36,15 @@ struct CompleteUploadOutcome {
   std::size_t content_length{0};
 };
 
+class ChannelRegistry;
+
 class MetadataClient {
  public:
-  explicit MetadataClient(const ClientOptions& options);
+  /**
+   * 构造接受 ChannelRegistry&（提供共享 baidu_std Channel）。
+   * Initialize 时取 registry.baidu_std() 作为 stub 的 channel。
+   */
+  MetadataClient(ChannelRegistry& registry, const ClientOptions& options);
 
   [[nodiscard]] Result<bool> Initialize();
   void Shutdown();
@@ -56,8 +62,12 @@ class MetadataClient {
   [[nodiscard]] Result<bool>
     AbortUpload(const std::string& upload_id) const;
 
+  /** 供 ApplyRequestTimeout 等访问 options。 */
+  [[nodiscard]] const ClientOptions& options() const noexcept { return options_; }
+
  private:
-  BrpcChannel channel_;
+  ChannelRegistry&     registry_;
+  const ClientOptions& options_;
   std::unique_ptr<us3_turbo_access::gateway::ControlPlaneService_Stub> stub_;
 };
 

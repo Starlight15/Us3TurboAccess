@@ -6,6 +6,7 @@
 #include "client/src/control/metadata_client.h"
 #include "client/src/core/async/client_executor.h"
 #include "client/src/core/client/capability_probe.h"
+#include "client/src/core/common/channel_registry.h"
 #include "client/src/core/common/errors.h"
 #include "client/src/core/gds/gds_context.h"
 #include "client/src/core/gds/gds_transfer_path.h"
@@ -34,9 +35,10 @@ struct ClientCore::Impl {
   explicit Impl(ClientOptions opts)
       : options(std::move(opts)),
         caps(DetectPlatformCapabilities(options)),
-        metadata_client(options),
-        gds_data_client(options),
-        rdma_data_plane_client(options),
+        channels(options),
+        metadata_client(channels, options),
+        gds_data_client(channels, options),
+        rdma_data_plane_client(channels, options),
         http_data_client(options),
         gds_executor(caps, GdsContext{.options = options,
                                       .metadata_client = metadata_client,
@@ -52,6 +54,15 @@ struct ClientCore::Impl {
 
   ClientOptions       options;
   PlatformCapabilities caps;
+  // ChannelRegistry 必须在三个 baidu_std client 之前构造（提供 brpc::Channel*）。
+  // 真正的 brpc::Channel 在 ChannelRegistry::Initialize 时才创建；构造期
+  // baidu_std() 返回 nullptr，三个 client 接受 nullptr，等 Initialize 路径
+  // 把 channel 建好后再调它们各自的 Initialize 创建 Stub。
+  // 由于 client 持的是 brpc::Channel*（成员变量在 Impl 构造时已绑定），
+  // ChannelRegistry::Initialize 必须创建 channel 并把 unique_ptr 持有，
+  // 而 baidu_std() 返回的是 unique_ptr.get()——因此 client 持的指针必须在
+  // Initialize 后才有效。把 ChannelRegistry::Initialize 放在最早一步即可。
+  ChannelRegistry     channels;
   MetadataClient      metadata_client;
   GdsDataClient       gds_data_client;
   RdmaDataPlaneClient rdma_data_plane_client;
@@ -82,6 +93,14 @@ Result<bool> ClientCore::Initialize() {
   }
   if (impl_->options.endpoint.empty()) {
     return Result<bool>::Failure(MakeInvalidArgument("endpoint must not be empty"));
+  }
+
+  // 兜底初始化 channels（构造期若 endpoint 已设则已 init；为空时这里再 init）。
+  // 三个 baidu_std client 持有的是 channel 指针；只要 channels.Initialize()
+  // 成功就同时让 metadata/gds/rdma 三个 client 的 channel_ 有效。
+  if (!impl_->channels.ready()) {
+    auto ch_init = impl_->channels.Initialize();
+    if (!ch_init.success()) return ch_init;
   }
 
   auto control_init = impl_->metadata_client.Initialize();
