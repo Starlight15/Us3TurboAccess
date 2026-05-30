@@ -33,11 +33,14 @@ void AppendQueryParam(std::string& uri, std::string_view key,
 }
 
 RpcCallMetadata MakeContext(const ClientOptions& options) {
+  // HTTP per-call timeout 优先使用端到端 request_timeout（默认 5min），
+  // 覆盖 channel 初始化时的 default_timeout（30s 是连接超时）。
+  // 单笔操作超时返回 brpc::ERPCTIMEDOUT → MapHttpFailure → kTimeout。
   return RpcCallMetadata{
       .client_id       = options.client_id,
       .bearer_token    = options.bearer_token,
       .default_headers = options.default_headers,
-      .timeout         = options.default_timeout,
+      .timeout         = options.request_timeout,
   };
 }
 
@@ -57,8 +60,8 @@ ErrorCode HttpStatusToCode(int status) {
     case brpc::HTTP_STATUS_FORBIDDEN:                return ErrorCode::kControlPlaneError;
     case brpc::HTTP_STATUS_BAD_GATEWAY:               return ErrorCode::kBackendUnavailable;
     case brpc::HTTP_STATUS_INTERNAL_SERVER_ERROR:    return ErrorCode::kInternal;
-    case brpc::HTTP_STATUS_SERVICE_UNAVAILABLE:
-    case brpc::HTTP_STATUS_GATEWAY_TIMEOUT:          return ErrorCode::kBackendUnavailable;
+    case brpc::HTTP_STATUS_SERVICE_UNAVAILABLE:      return ErrorCode::kBackendUnavailable;
+    case brpc::HTTP_STATUS_GATEWAY_TIMEOUT:          return ErrorCode::kTimeout;
     default:
       return (status >= 500) ? ErrorCode::kInternal : ErrorCode::kBadRequest;
   }
@@ -92,7 +95,7 @@ Error MapHttpFailure(const brpc::Controller& cntl, std::string_view fallback) {
   // 但优先读它意味着未来 server 切到写真正的 ErrorCode 数值时本端不需要改。
   if (auto raw = ParseErrorCodeHeader(cntl); raw.has_value()) {
     // 头里也是 HTTP code 时，HttpStatusToCode 已处理；否则按枚举值收。
-    if (*raw >= 0 && *raw <= static_cast<int>(ErrorCode::kPayloadTooLarge)) {
+    if (*raw >= 0 && *raw <= static_cast<int>(ErrorCode::kTimeout)) {
       code = static_cast<ErrorCode>(*raw);
     }
   }

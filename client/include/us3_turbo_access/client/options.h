@@ -106,6 +106,15 @@ struct ClientOptions {
   std::unordered_map<std::string, std::string> default_headers;
   /** Default per-request timeout when RequestOptions::timeout is unset. */
   std::chrono::milliseconds default_timeout{std::chrono::milliseconds(30000)};
+  /**
+   * 端到端单笔传输超时（覆盖 PUT/GET/UploadPart 一次完整操作）。
+   * 三通路统一使用：
+   *   HTTP : 设到 brpc Controller::set_timeout_ms（覆盖 channel 默认）
+   *   RDMA : 在 OpenSession + WRITE 提交 + CQ 等待之间检查 deadline
+   *   GDS  : OpenSession 与 PutChunk brpc 调用上 set_timeout_ms
+   * 超时统一返回 ErrorCode::kTimeout（retryable=true）。
+   */
+  std::chrono::milliseconds request_timeout{std::chrono::minutes(5)};
   /** Data transport selected for transfer operations. */
   DataPath data_path{DataPath::kGdsCuObject};
   /** Optional logger; if null, the client falls back to a null sink. */

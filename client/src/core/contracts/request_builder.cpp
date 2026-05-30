@@ -24,10 +24,14 @@ constexpr char kDefaultGatewayId[] = "gateway-local";
 
 [[nodiscard]] RpcCallMetadata MakeRpcContext(const ClientOptions& options,
                                                 std::chrono::milliseconds timeout) {
+  // RequestOptions::timeout 0 表示走 ClientOptions::request_timeout（端到端默认）。
+  // 这样三通路的 RPC（OpenSession / DiscoverEndpoint / GdsChunk 等）都尊重统一超时。
+  const auto effective =
+      (timeout.count() <= 0) ? options.request_timeout : timeout;
   return RpcCallMetadata{.client_id = options.client_id,
                            .bearer_token = options.bearer_token,
                            .default_headers = options.default_headers,
-                           .timeout = timeout};
+                           .timeout = effective};
 }
 
 }  // namespace

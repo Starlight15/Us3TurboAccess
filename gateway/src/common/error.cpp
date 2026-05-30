@@ -28,6 +28,7 @@ int ToHttpStatus(ErrorCode code) noexcept {
     case ErrorCode::kBackendUnavailable:  return 502;
     case ErrorCode::kRdmaUnavailable:     return 503;
     case ErrorCode::kMethodNotAllowed:    return 405;
+    case ErrorCode::kTimeout:             return 504;
     case ErrorCode::kRpcError:
     case ErrorCode::kSerializationError:
     case ErrorCode::kControlPlaneError:

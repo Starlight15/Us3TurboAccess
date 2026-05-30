@@ -14,6 +14,16 @@ namespace us3_turbo_access::client {
 
 [[nodiscard]] std::string TrimTrailingSlash(std::string endpoint);
 void ApplyRequestHeaders(brpc::Controller& controller, const RpcCallMetadata& context);
+
+/**
+ * 给一个 brpc::Controller 设端到端 request_timeout（毫秒）。
+ * baidu_std / HTTP 两类 client 都用同一入口；HTTP 已经通过
+ * ApplyRequestHeaders 一并设了 timeout（来自 context），baidu_std 调用方
+ * （MetadataClient / GdsDataClient / RdmaDataPlaneClient）显式调本函数。
+ */
+void ApplyRequestTimeout(brpc::Controller& controller,
+                         const ClientOptions& options);
+
 [[nodiscard]] Result<bool> CheckRpcFailure(const brpc::Controller& controller,
                                            const std::string& message,
                                            DataPath path,

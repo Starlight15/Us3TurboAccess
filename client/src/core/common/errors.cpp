@@ -1,5 +1,7 @@
 #include "client/src/core/common/errors.h"
 
+#include <brpc/errno.pb.h>
+
 namespace us3_turbo_access::client {
 
 Error MakeNotInitialized(std::string_view component) {
@@ -21,7 +23,11 @@ Error MakeRpcFailure(const brpc::Controller& controller,
                      std::string_view message,
                      DataPath path,
                      std::string_view request_id) {
-  return MakeError(ErrorCode::kControlPlaneError,
+  // brpc 超时 (ERPCTIMEDOUT / ETIMEDOUT) → 统一映射为 kTimeout 让上层
+  // RetryIfRetryable 能正确处理（kTimeout 默认 retryable=true）。
+  const int err = controller.ErrorCode();
+  const bool is_timeout = (err == brpc::ERPCTIMEDOUT) || (err == ETIMEDOUT);
+  return MakeError(is_timeout ? ErrorCode::kTimeout : ErrorCode::kControlPlaneError,
                    std::string(message) + ": " + controller.ErrorText(), true,
                    std::string(ToString(path)), std::string(request_id));
 }

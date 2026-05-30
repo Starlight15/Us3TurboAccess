@@ -2,6 +2,7 @@
 
 #include <brpc/controller.h>
 
+#include "client/src/core/common/brpc_channel.h"  // ApplyRequestTimeout
 #include "client/src/core/common/errors.h"
 
 namespace us3_turbo_access::client {
@@ -34,6 +35,7 @@ Result<RdmaDiscoverInfo> RdmaDataPlaneClient::DiscoverEndpoint(
         MakeNotInitialized("RDMA data plane client"));
   }
   brpc::Controller controller;
+  ApplyRequestTimeout(controller, channel_.options());
   us3_turbo_access::gateway::RdmaDiscoverRequest req;
   req.set_session_id(session_id);
   us3_turbo_access::gateway::RdmaDiscoverResponse resp;
@@ -57,6 +59,7 @@ Result<RdmaBindInfo> RdmaDataPlaneClient::BindSessionToConnection(
         MakeNotInitialized("RDMA data plane client"));
   }
   brpc::Controller controller;
+  ApplyRequestTimeout(controller, channel_.options());
   us3_turbo_access::gateway::RdmaBindRequest req;
   req.set_session_id(session_id);
   req.set_conn_token(conn_token);
@@ -79,6 +82,7 @@ Result<RdmaCommitInfo> RdmaDataPlaneClient::CommitObject(
     return Result<RdmaCommitInfo>::Failure(MakeNotInitialized("RDMA data plane client"));
   }
   brpc::Controller controller;
+  ApplyRequestTimeout(controller, channel_.options());
   us3_turbo_access::gateway::RdmaCommitRequest req;
   req.set_session_id(session_id);
   req.set_bytes_transferred(bytes_transferred);
@@ -101,6 +105,7 @@ Result<bool> RdmaDataPlaneClient::AbortSession(
     return Result<bool>::Failure(MakeNotInitialized("RDMA data plane client"));
   }
   brpc::Controller controller;
+  ApplyRequestTimeout(controller, channel_.options());
   us3_turbo_access::gateway::RdmaAbortRequest req;
   req.set_session_id(session_id);
   us3_turbo_access::gateway::RdmaAbortResponse resp;
@@ -120,6 +125,7 @@ Result<RdmaCommitPartInfo> RdmaDataPlaneClient::CommitPart(
     return Result<RdmaCommitPartInfo>::Failure(MakeNotInitialized("RDMA data plane client"));
   }
   brpc::Controller controller;
+  ApplyRequestTimeout(controller, channel_.options());
   us3_turbo_access::gateway::RdmaCommitPartRequest req;
   req.set_session_id(session_id);
   req.set_upload_id(upload_id);

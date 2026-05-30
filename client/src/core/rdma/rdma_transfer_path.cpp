@@ -97,6 +97,20 @@ void DiscardAndAbort(ConnectionHandle& handle,
     const RdmaDataPlaneClient& data_plane, RdmaConnectionPool& pool,
     RdmaCompletionDriver& driver, const RequestOptions& request,
     ConstBufferView buffer, bool is_multipart_part) {
+  // 端到端 deadline：在 OpenSession / Discover / Bind 之间检查；
+  // CQ 等待（wait_for）也用 deadline 做超时返回。
+  const auto deadline =
+      std::chrono::steady_clock::now() + options.request_timeout;
+  auto check_deadline = [&](const char* stage) -> Result<RdmaWritePrepared> {
+    if (std::chrono::steady_clock::now() >= deadline) {
+      return Result<RdmaWritePrepared>::Failure(MakeError(
+          ErrorCode::kTimeout,
+          std::string("RDMA request_timeout exceeded before ") + stage, true));
+    }
+    return Result<RdmaWritePrepared>::Success({});
+  };
+
+  if (auto d = check_deadline("OpenSession"); !d.success()) return d;
   // 1) OpenSession
   auto open_req = MakeSessionHandshake(options, SessionPlan{
       .operation = OperationType::kPut,
@@ -112,6 +126,10 @@ void DiscardAndAbort(ConnectionHandle& handle,
   }
   const std::string session_id = open_resp.value().session_id();
 
+  if (auto d = check_deadline("DiscoverEndpoint"); !d.success()) {
+    (void)data_plane.AbortSession(session_id);
+    return d;
+  }
   // 2) DiscoverEndpoint：拿到地址即可发起 CM；max_msg_bytes 用来提前拒掉超大请求。
   auto disc = data_plane.DiscoverEndpoint(session_id);
   if (!disc.success()) {
@@ -124,6 +142,10 @@ void DiscardAndAbort(ConnectionHandle& handle,
         "buffer 超过 gateway max_msg_bytes"));
   }
 
+  if (auto d = check_deadline("ConnectionPool.Acquire"); !d.success()) {
+    (void)data_plane.AbortSession(session_id);
+    return d;
+  }
   // 3) 借 QP：池里有空闲直接拿；没有就 CM 三次握手现场建。
   auto handle = pool.Acquire(disc.value().host,
                               static_cast<std::uint16_t>(disc.value().port));
@@ -134,6 +156,10 @@ void DiscardAndAbort(ConnectionHandle& handle,
   ConnectionHandle conn_handle = std::move(handle.value());
   auto* conn = conn_handle.conn();
 
+  if (auto d = check_deadline("BindSession"); !d.success()) {
+    DiscardAndAbort(conn_handle, data_plane, session_id);
+    return d;
+  }
   // 4) Bind：server 收到 conn_token 后在该连接的 PD 上 alloc + reg_mr，
   //    把 (raddr, rkey) 回给我们当 RDMA WRITE 的目的地。
   auto bound = data_plane.BindSessionToConnection(session_id, conn->conn_token());
@@ -162,8 +188,15 @@ void DiscardAndAbort(ConnectionHandle& handle,
     DiscardAndAbort(conn_handle, data_plane, session_id);
     return Result<RdmaWritePrepared>::Failure(posted.error());
   }
-  // 阻塞等 WC；driver 在收到 ibv_wc 后 set_value 唤醒。
+  // 阻塞等 WC：用 deadline 控制 CQ 等待时长；超时则丢弃 QP（远端可能仍在写）。
   RdmaCompletion comp{};
+  if (fut.wait_until(deadline) != std::future_status::ready) {
+    DiscardAndAbort(conn_handle, data_plane, session_id);
+    return Result<RdmaWritePrepared>::Failure(MakeError(
+        ErrorCode::kTimeout,
+        "RDMA WRITE completion timeout (request_timeout exceeded)", true,
+        std::string(ToString(DataPath::kNativeRdma))));
+  }
   try {
     comp = fut.get();
   } catch (const std::exception& e) {

@@ -24,6 +24,14 @@ void ApplyRequestHeaders(brpc::Controller& controller, const RpcCallMetadata& co
   controller.set_timeout_ms(static_cast<int>(context.timeout.count()));
 }
 
+void ApplyRequestTimeout(brpc::Controller& controller,
+                         const ClientOptions& options) {
+  // 端到端 request_timeout 覆盖 channel 默认（baidu_std channel 初始化时
+  // 取的是 default_timeout，30s）；这里强制使用 request_timeout（默认 5min）。
+  controller.set_timeout_ms(
+      static_cast<int>(options.request_timeout.count()));
+}
+
 Result<bool> CheckRpcFailure(const brpc::Controller& controller,
                              const std::string& message,
                              DataPath path,
