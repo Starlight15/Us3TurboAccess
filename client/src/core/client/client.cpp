@@ -15,6 +15,7 @@
 #include "client/src/core/contracts/request_builder.h"
 #include "client/src/core/gds/gds_transfer_path.h"
 #include "client/src/core/http/http_transfer_path.h"
+#include "client/src/core/metrics/client_metrics.h"
 #include "client/src/core/rdma/rdma_transfer_path.h"
 #include "client/src/core/routing/transfer_router.h"
 #include "client/src/core/upload/upload_coordinator.h"
@@ -163,6 +164,8 @@ Result<TransferOutcome> MultipartUpload::UploadPart(std::uint32_t part_number,
 
   // 按 data_path 分发：GDS / RDMA 走 control plane + 各自数据面；
   // HTTP 走纯 HTTP UploadPart 路径。
+  ScopedTransferMetric metric(ScopedTransferMetric::Op::kUploadPart,
+                                static_cast<std::int64_t>(buffer.size));
   Result<TransferOutcome> outcome = Result<TransferOutcome>::Failure(
       MakeInvalidArgument("unreachable"));
   switch (impl_->data_path) {
@@ -180,6 +183,7 @@ Result<TransferOutcome> MultipartUpload::UploadPart(std::uint32_t part_number,
                                 impl_->upload_id, part_number, object_offset, buffer);
       break;
   }
+  if (outcome.success()) metric.MarkSuccess();
   if (!outcome.success()) {
     return outcome;
   }
@@ -370,7 +374,10 @@ Result<ObjectMetadata> Client::HeadObject(const ObjectId& object) const {
   if (!core_->initialized()) {
     return Result<ObjectMetadata>::Failure(MakeNotInitialized("Client"));
   }
-  return core_->metadata_client().HeadObject(object);
+  ScopedTransferMetric metric(ScopedTransferMetric::Op::kHead);
+  auto r = core_->metadata_client().HeadObject(object);
+  if (r.success()) metric.MarkSuccess();
+  return r;
 }
 
 Result<TransferOutcome> Client::GetObject(const RequestOptions& request,
@@ -378,7 +385,13 @@ Result<TransferOutcome> Client::GetObject(const RequestOptions& request,
   if (!core_->initialized()) {
     return Result<TransferOutcome>::Failure(MakeNotInitialized("Client"));
   }
-  return core_->transfer_router().GetObject(request, buffer);
+  ScopedTransferMetric metric(ScopedTransferMetric::Op::kGet);
+  auto r = core_->transfer_router().GetObject(request, buffer);
+  if (r.success()) {
+    metric.MarkSuccess();
+    metric.SetBytes(static_cast<std::int64_t>(r.value().bytes_transferred));
+  }
+  return r;
 }
 
 Result<TransferOutcome> Client::PutObject(const RequestOptions& request,
@@ -386,7 +399,11 @@ Result<TransferOutcome> Client::PutObject(const RequestOptions& request,
   if (!core_->initialized()) {
     return Result<TransferOutcome>::Failure(MakeNotInitialized("Client"));
   }
-  return core_->transfer_router().PutObject(request, buffer);
+  ScopedTransferMetric metric(ScopedTransferMetric::Op::kPut,
+                                static_cast<std::int64_t>(buffer.size));
+  auto r = core_->transfer_router().PutObject(request, buffer);
+  if (r.success()) metric.MarkSuccess();
+  return r;
 }
 
 namespace {
