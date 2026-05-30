@@ -89,6 +89,13 @@ Result<TransferOutcome> HttpTransferPath::GetObjectSingle(
   outcome.etag              = report.value().meta.etag;
   outcome.version           = report.value().meta.version;
   outcome.bytes_transferred = report.value().bytes;
+  outcome.server_crc32c     = report.value().server_crc32c;
+  // 完成时回调一次（单连接 GET 中间无进度）。
+  if (request.progress_callback) {
+    request.progress_callback({.bytes_completed = report.value().bytes,
+                                .bytes_total = report.value().bytes,
+                                .data_path = kPath});
+  }
   return Result<TransferOutcome>::Success(std::move(outcome));
 }
 
@@ -153,6 +160,12 @@ Result<TransferOutcome> HttpTransferPath::GetObjectParallel(
     total_bytes += r.value().bytes;
     if (etag.empty())    etag    = r.value().meta.etag;
     if (version.empty()) version = r.value().meta.version;
+    // 每完成一个 sub-range 回调一次，让上层看到累积进度。
+    if (request.progress_callback) {
+      request.progress_callback({.bytes_completed = total_bytes,
+                                  .bytes_total = total,
+                                  .data_path = kPath});
+    }
   }
 
   TransferOutcome outcome;
@@ -197,6 +210,12 @@ Result<TransferOutcome> HttpTransferPath::PutObject(
   outcome.version           = report.value().meta.version;
   outcome.bytes_transferred = report.value().bytes;
   outcome.server_crc32c     = report.value().server_crc32c;
+  // 单段 PUT 完成时回调一次（HTTP 同步 RPC 中间没有进度可报）。
+  if (request.progress_callback) {
+    request.progress_callback({.bytes_completed = report.value().bytes,
+                                .bytes_total = buffer.size,
+                                .data_path = kPath});
+  }
   return Result<TransferOutcome>::Success(std::move(outcome));
 }
 
@@ -228,6 +247,12 @@ Result<TransferOutcome> HttpTransferPath::PutObjectPart(
   outcome.etag              = part.value().etag;   // part_etag
   outcome.bytes_transferred = buffer.size;
   outcome.server_crc32c     = part.value().server_crc32c;
+  // Multipart 单 part 完成回调；上层 MultipartUpload::UploadParts 串起多 part 进度。
+  if (request.progress_callback) {
+    request.progress_callback({.bytes_completed = buffer.size,
+                                .bytes_total = buffer.size,
+                                .data_path = kPath});
+  }
   return Result<TransferOutcome>::Success(std::move(outcome));
 }
 

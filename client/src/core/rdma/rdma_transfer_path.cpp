@@ -278,6 +278,12 @@ Result<TransferOutcome> RdmaTransferPath::PutObject(const RequestOptions& reques
     outcome.etag              = commit.value().etag;
     outcome.version           = commit.value().version;
     outcome.bytes_transferred = buffer.size;
+    // RDMA WRITE 完成 + Commit 通过后回调一次（中间不可中断，无逐步进度）。
+    if (request.progress_callback) {
+      request.progress_callback({.bytes_completed = buffer.size,
+                                  .bytes_total = buffer.size,
+                                  .data_path = DataPath::kNativeRdma});
+    }
     return Result<TransferOutcome>::Success(std::move(outcome));
   });
 }
@@ -321,6 +327,12 @@ Result<TransferOutcome> RdmaTransferPath::PutObjectPart(
     outcome.transfer_status   = "completed";
     outcome.etag              = commit.value().part_etag;
     outcome.bytes_transferred = buffer.size;
+    // Multipart 单 part 完成回调（上层 UploadParts 串起多 part 进度）。
+    if (request.progress_callback) {
+      request.progress_callback({.bytes_completed = buffer.size,
+                                  .bytes_total = buffer.size,
+                                  .data_path = DataPath::kNativeRdma});
+    }
     return Result<TransferOutcome>::Success(std::move(outcome));
   });
 }
