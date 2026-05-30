@@ -129,6 +129,7 @@ const TransferRouter& ClientCore::transfer_router() const { return impl_->transf
 GdsDataClient& ClientCore::gds_data_client() { return impl_->gds_data_client; }
 GdsMemoryRegistry& ClientCore::gds_memory_registry() { return impl_->gds_memory_registry; }
 const CuObjectClient& ClientCore::cuobj_client() const { return impl_->cuobject_client; }
+const GdsTransferPath& ClientCore::gds_transfer_path() const { return impl_->gds_executor; }
 const RdmaTransferPath& ClientCore::rdma_transfer_path() const { return impl_->rdma_executor; }
 const HttpTransferPath& ClientCore::http_transfer_path() const { return impl_->http_executor; }
 HttpDataClient& ClientCore::http_data_client() { return impl_->http_data_client; }

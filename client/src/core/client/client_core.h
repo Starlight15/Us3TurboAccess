@@ -13,6 +13,7 @@ class GdsDataClient;
 class GdsMemoryRegistry;
 class CuObjectClient;
 class ClientExecutor;
+class GdsTransferPath;
 class RdmaTransferPath;
 class HttpTransferPath;
 class HttpDataClient;
@@ -42,6 +43,7 @@ class ClientCore {
   [[nodiscard]] GdsDataClient& gds_data_client();
   [[nodiscard]] GdsMemoryRegistry& gds_memory_registry();
   [[nodiscard]] const CuObjectClient& cuobj_client() const;
+  [[nodiscard]] const GdsTransferPath& gds_transfer_path() const;
   [[nodiscard]] const RdmaTransferPath& rdma_transfer_path() const;
   [[nodiscard]] const HttpTransferPath& http_transfer_path() const;
   [[nodiscard]] HttpDataClient& http_data_client();

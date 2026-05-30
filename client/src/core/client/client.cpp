@@ -13,6 +13,7 @@
 #include "client/src/core/client/client_core.h"
 #include "client/src/core/common/errors.h"
 #include "client/src/core/contracts/request_builder.h"
+#include "client/src/core/gds/gds_transfer_path.h"
 #include "client/src/core/http/http_transfer_path.h"
 #include "client/src/core/rdma/rdma_transfer_path.h"
 #include "client/src/core/routing/transfer_router.h"
@@ -78,8 +79,8 @@ void MultipartUpload::set_checksum_policy(std::string policy) {
 
 namespace {
 
-// GDS 单 part 实现：现有行为不变。OpenSession 把 expected_size=0
-// 透传，gateway 不在 OnSessionOpened 里做整对象 Reserve。
+// GDS 单 part：透传到 GdsTransferPath::PutObjectPart（与 RDMA/HTTP 对齐）。
+// 内部 expected_size=0 跳过整对象 Reserve，最终走 cuobj.ExecutePutPart。
 Result<TransferOutcome> UploadPartGds(ClientCore& core,
                                        const ObjectId& object,
                                        const std::string& checksum_policy,
@@ -93,28 +94,8 @@ Result<TransferOutcome> UploadPartGds(ClientCore& core,
   // length 留空：cuObj 走 buffer.size（cuobject_client 内部 fallback），
   // 让 expected_size=0 保留 GDS 原来的 Reserve 跳过行为。
   request.checksum_policy = checksum_policy;
-
-  auto registration = core.gds_memory_registry().Register(
-      OperationType::kPut, buffer);
-  if (!registration.success()) {
-    return Result<TransferOutcome>::Failure(registration.error());
-  }
-  auto open_request = MakeSessionHandshake(core.options(), SessionPlan{
-      .operation = OperationType::kPut,
-      .request = request,
-      .buffer_type = buffer.type,
-      .path = DataPath::kGdsCuObject,
-  });
-  auto open_response =
-      core.metadata_client().OpenTransferSession(open_request);
-  if (!open_response.success()) {
-    return Result<TransferOutcome>::Failure(open_response.error());
-  }
-  auto session = ImportSession(open_response.value());
-
-  return core.cuobj_client().ExecutePutPart(
-      core.options(), core.gds_data_client(), session, request, buffer,
-      upload_id, part_number);
+  return core.gds_transfer_path().PutObjectPart(request, buffer, upload_id,
+                                                  part_number);
 }
 
 // RDMA 单 part 实现：走 RdmaTransferPath::PutObjectPart；

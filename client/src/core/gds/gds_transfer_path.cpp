@@ -76,4 +76,39 @@ Result<TransferOutcome> GdsTransferPath::PutObject(const RequestOptions& request
                                           request, buffer);
 }
 
+// Multipart 单 part：与整对象 PutObject 同流程，但 expected_size=0 跳过
+// gateway 端 OnSessionOpened 的整对象 Reserve；最终走 cuobj.ExecutePutPart
+// 落 part_etag。逻辑搬自原 client.cpp::UploadPartGds，保持行为一致。
+Result<TransferOutcome> GdsTransferPath::PutObjectPart(
+    const RequestOptions& request, ConstBufferView buffer,
+    const std::string& upload_id, std::uint32_t part_number) const {
+  if (!available()) {
+    return Result<TransferOutcome>::Failure(MakeGdsUnsupportedError());
+  }
+
+  // expected_size = 0：OpenSession 中 length 不带，gateway 不做整对象 Reserve。
+  // 落地走 ExecutePutPart 而非 ExecutePut（part_etag 取自 multipart 路径）。
+  auto registration =
+      context_.memory_registry.Register(OperationType::kPut, buffer);
+  if (!registration.success()) {
+    return Result<TransferOutcome>::Failure(registration.error());
+  }
+
+  auto open_request = MakeSessionHandshake(context_.options, SessionPlan{
+      .operation = OperationType::kPut,
+      .request = request,
+      .buffer_type = buffer.type,
+      .path = DataPath::kGdsCuObject,
+  });
+  auto open_response = context_.metadata_client.OpenTransferSession(open_request);
+  if (!open_response.success()) {
+    return Result<TransferOutcome>::Failure(open_response.error());
+  }
+  auto session = ImportSession(open_response.value());
+
+  return context_.cuobj_client.ExecutePutPart(
+      context_.options, context_.data_client, session, request, buffer,
+      upload_id, part_number);
+}
+
 }  // namespace us3_turbo_access::client
