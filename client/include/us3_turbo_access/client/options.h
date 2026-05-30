@@ -16,12 +16,17 @@ namespace us3_turbo_access::client {
 /**
  * @brief GDS-specific client tuning.
  *
- * The current GDS transport delegates scheduling to the cuObject SDK and
- * exposes no tunables. This struct is reserved so future GDS options can
- * be added without breaking the top-level ClientOptions layout.
+ * Reserved for cuObject scheduling / buffer / checksum tuning.
  */
 struct GdsClientOptions {
-  // Reserved for future cuObject scheduling / buffer / checksum tuning.
+  /**
+   * Object length above which GetObject splits into parallel sub-ranges
+   * (client-side concurrency on top of gateway-side chunk_plan).
+   * 默认 64 MiB：阈值偏高，因 GDS 单 cuObject Get 已经高效。
+   */
+  std::size_t parallel_get_threshold{64ULL * 1024 * 1024};
+  /** Number of parallel sub-ranges issued by split GETs. */
+  std::size_t parallel_get_chunks{4};
 };
 
 /**
@@ -81,6 +86,15 @@ struct RdmaClientOptions {
   std::chrono::milliseconds pool_idle_timeout{std::chrono::seconds(60)};
   /** Timeout for the initial RDMA-CM resolve+connect handshake. */
   std::chrono::milliseconds connect_timeout{std::chrono::seconds(5)};
+
+  /**
+   * Object length above which GetObject splits into parallel sub-ranges
+   * (reserved for future RDMA GET implementation; not used today).
+   * 默认 32 MiB；RDMA 单 WRITE 已是高吞吐，阈值偏高即可。
+   */
+  std::size_t parallel_get_threshold{32ULL * 1024 * 1024};
+  /** Number of parallel sub-ranges issued by split GETs (RDMA GET 预留). */
+  std::size_t parallel_get_chunks{4};
 
   /** Size of the libibverbs completion queue. */
   int  cq_size{4096};
