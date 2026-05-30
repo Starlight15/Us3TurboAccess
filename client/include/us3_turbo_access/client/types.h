@@ -140,10 +140,14 @@ struct TransferOutcome {
   /** Object version assigned by the backend, when versioning is enabled. */
   std::string version;
   /**
-   * Server-computed CRC32C parsed from the response header
-   * x-amz-checksum-crc32c. Populated by the HTTP path on PUT/UploadPart
-   * for end-to-end validation against the client-side CRC. Other paths
-   * (GDS/RDMA) leave this empty.
+   * Server-computed CRC32C：
+   *   HTTP PUT / UploadPart  : 来自响应头 x-amz-checksum-crc32c
+   *   HTTP GET               : 来自响应头（P1.3 后），client 端边读边算并比对
+   *   RDMA PUT/PUT_PART/GET  : 来自 CommitObject/CommitPart/CommitGet 响应字段
+   *   GDS PUT/GET           : 来自 GdsChunkResponse.crc32c
+   *
+   * GET 路径下若两端 CRC 不一致，TransferPath 直接返回 kInvalidArgument
+   * 错误（不会把结果交给调用方）；PUT 路径下 server 校验失败也是同样语义。
    */
   std::optional<std::uint32_t> server_crc32c;
 };

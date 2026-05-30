@@ -73,6 +73,9 @@ template <typename BufferPointer>
   outcome.etag              = disp.value().etag;
   outcome.version           = disp.value().version;
   outcome.bytes_transferred = req_bytes;
+  if (disp.value().crc32c != 0) {
+    outcome.server_crc32c = disp.value().crc32c;
+  }
 
   if (request.progress_callback) {
     request.progress_callback({.bytes_completed = req_bytes,

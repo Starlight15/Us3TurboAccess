@@ -14,6 +14,7 @@
 #include <cuobjserver.h>
 #include <infiniband/verbs.h>
 
+#include "common/crc32c.h"
 #include "common/error.h"
 #include "core/metadata/metadata_service.h"
 #include "data_path/gds/buffer_pool.h"
@@ -164,22 +165,23 @@ Result<std::shared_ptr<cuObjServer>> GdsExecutor::GetServer() const {
 }
 
 // GET：backend → pinned buffer → RDMA-WRITE 到 client GPU。单次 ≤ 1 GiB。
-Result<std::string> GdsExecutor::GetChunk(const core::Session& session,
-                                          const std::string& rdma_token,
-                                          std::uint64_t object_offset,
-                                          std::uint64_t length) {
+// 在 pinned buffer 阶段计算 CRC32C 让 client 做 end-to-end 校验。
+Result<GdsExecutor::GetChunkOutcome> GdsExecutor::GetChunk(
+    const core::Session& session, const std::string& rdma_token,
+    std::uint64_t object_offset, std::uint64_t length) {
+  using Outcome = GdsExecutor::GetChunkOutcome;
   if (length > opts_.max_chunk_bytes) {
-    return Result<std::string>::Failure(MakeGdsError(
+    return Result<Outcome>::Failure(MakeGdsError(
         ErrorCode::kBadRequest,
         "GDS GET chunk exceeds 1 GiB cuObjServer limit", false));
   }
   if (length == 0U) {
-    return Result<std::string>::Success("gds-cuobject-rdma-write-empty");
+    return Result<Outcome>::Success(Outcome{"gds-cuobject-rdma-write-empty", 0});
   }
 
   auto server_lookup = GetServer();
   if (!server_lookup.success()) {
-    return Result<std::string>::Failure(server_lookup.error());
+    return Result<Outcome>::Failure(server_lookup.error());
   }
 
   // mu_ 仅短暂拷贝 pool 引用；Acquire 在锁外执行避免成为热点。
@@ -193,7 +195,7 @@ Result<std::string> GdsExecutor::GetChunk(const core::Session& session,
     lease = pool_ref->Acquire(static_cast<std::size_t>(length));
   }
   if (!lease.ok()) {
-    return Result<std::string>::Failure(MakeGdsError(
+    return Result<Outcome>::Failure(MakeGdsError(
         ErrorCode::kRdmaUnavailable, "cuObjServer pinned buffer alloc failed"));
   }
 
@@ -203,17 +205,22 @@ Result<std::string> GdsExecutor::GetChunk(const core::Session& session,
                             std::span<std::byte>(staging,
                                                   static_cast<std::size_t>(length)));
   if (!read.success()) {
-    return Result<std::string>::Failure(read.error());
+    return Result<Outcome>::Failure(read.error());
   }
   if (read.value() == 0U) {
-    return Result<std::string>::Success("gds-cuobject-rdma-write-empty");
+    return Result<Outcome>::Success(Outcome{"gds-cuobject-rdma-write-empty", 0});
   }
   const std::size_t actual_size = read.value();
+
+  // 在 RDMA 推送之前算 CRC32C，反映 server 真正读到的字节；client 用同一
+  // 字节序列在 GPU 端再算一次（或信任 server）做 end-to-end 校验。
+  const std::uint32_t crc = common::Crc32c(
+      std::span<const std::byte>(staging, actual_size));
 
   auto server = server_lookup.value();
   const auto channel = server->allocateChannelId();
   if (channel == INVALID_CHANNEL_ID) {
-    return Result<std::string>::Failure(MakeGdsError(
+    return Result<Outcome>::Failure(MakeGdsError(
         ErrorCode::kRdmaUnavailable, "cuObjServer allocateChannelId failed"));
   }
   ChannelGuard chan_guard(*server, channel);
@@ -224,21 +231,21 @@ Result<std::string> GdsExecutor::GetChunk(const core::Session& session,
       BuildObjectId(session), lease.mr(), remote_buf_start, actual_size,
       rdma_token, channel, 0, &status, nullptr);
   if (logger_ != nullptr) {
-    logger_->info("gds.get object={} offset={} length={} transferred={} status={}",
+    logger_->info("gds.get object={} offset={} length={} transferred={} status={} crc32c={:x}",
                   BuildObjectId(session), object_offset, length, transferred,
-                  DescribeStatus(status));
+                  DescribeStatus(status), crc);
   }
   if (transferred < 0) {
-    return Result<std::string>::Failure(MakeGdsError(
+    return Result<Outcome>::Failure(MakeGdsError(
         ErrorCode::kRpcError,
         "cuObjServer handleGetObject failed: " + DescribeStatus(status)));
   }
   if (static_cast<std::size_t>(transferred) != actual_size) {
-    return Result<std::string>::Failure(MakeGdsError(
+    return Result<Outcome>::Failure(MakeGdsError(
         ErrorCode::kRpcError,
         "cuObjServer handleGetObject short transfer"));
   }
-  return Result<std::string>::Success("gds-cuobject-rdma-write");
+  return Result<Outcome>::Success(Outcome{"gds-cuobject-rdma-write", crc});
 }
 
 // 单对象 PUT：RDMA-READ from GPU → pinned buffer → backend.WriteRange。

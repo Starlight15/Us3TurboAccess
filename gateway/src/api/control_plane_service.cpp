@@ -41,7 +41,7 @@ namespace {
 void FillGdsResponse(const std::string& gateway_id,
                      const std::string& transfer_status,
                      const std::string& rdma_reply, const std::string& etag,
-                     const std::string& version,
+                     const std::string& version, std::uint32_t crc32c,
                      ::us3_turbo_access::gateway::GdsChunkResponse* resp) {
   resp->set_selected_gateway(gateway_id);
   resp->set_gateway_id(gateway_id);
@@ -49,6 +49,7 @@ void FillGdsResponse(const std::string& gateway_id,
   resp->set_rdma_reply(rdma_reply);
   resp->set_etag(etag);
   resp->set_version(version);
+  resp->set_crc32c(crc32c);
 }
 
 [[nodiscard]] core::OpenSessionParams ToOpenSessionParams(
@@ -205,8 +206,9 @@ void ControlPlaneService::HandleGdsGet(
   }
   common::metrics().gds_get_total << 1;
   common::metrics().gds_get_bytes << static_cast<std::int64_t>(request->chunk_size());
-  FillGdsResponse(session->gateway_id, "completed", chunk.value(),
-                  head.value().etag, head.value().version, response);
+  FillGdsResponse(session->gateway_id, "completed", chunk.value().rdma_reply,
+                  head.value().etag, head.value().version,
+                  chunk.value().crc32c, response);
 }
 
 void ControlPlaneService::GdsPut(
@@ -273,7 +275,7 @@ void ControlPlaneService::HandleGdsPut(
     common::metrics().gds_put_total << 1;
     common::metrics().gds_put_bytes << static_cast<std::int64_t>(request->chunk_size());
     FillGdsResponse(session->gateway_id, "completed", "gds-cuobject-rdma-read",
-                    part_etag.value(), /*version=*/"", response);
+                    part_etag.value(), /*version=*/"", /*crc32c=*/0, response);
     return;
   }
   // 单对象分支
@@ -289,7 +291,8 @@ void ControlPlaneService::HandleGdsPut(
   common::metrics().gds_put_total << 1;
   common::metrics().gds_put_bytes << static_cast<std::int64_t>(request->chunk_size());
   FillGdsResponse(session->gateway_id, "completed", "gds-cuobject-rdma-read",
-                  written.value().etag, written.value().version, response);
+                  written.value().etag, written.value().version,
+                  /*crc32c=*/0, response);
 }
 
 void ControlPlaneService::StartUpload(

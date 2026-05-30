@@ -77,6 +77,10 @@ message GdsChunkResponse {
   string rdma_reply = 4;
   string etag = 5;
   string version = 6;
+  // Server 端算出的 CRC32C（host pinned buffer 阶段）。
+  // GET 路径让 client 做 end-to-end 校验；PUT 路径用于响应回写。
+  // 0 表示未计算（向后兼容）。
+  uint32 crc32c = 7;
 }
 
 message StartUploadRequest {

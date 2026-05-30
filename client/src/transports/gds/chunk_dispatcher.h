@@ -35,6 +35,9 @@ class ChunkDispatcher {
     std::string rdma_reply;
     std::string etag;
     std::string version;
+    // Server 端在 pinned buffer 阶段算出的 CRC32C（GET 路径有效）；
+    // 0 表示未计算 / PUT 路径不填。
+    std::uint32_t crc32c{0};
   };
 
   /**

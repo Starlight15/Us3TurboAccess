@@ -62,10 +62,21 @@ class GdsExecutor final : public IDataPathExecutor {
   [[nodiscard]] const std::string& bind_host() const noexcept { return bind_host_; }
 
   /**
+   * @brief GetChunk 返回值：RDMA reply 字符串 + server 端 CRC32C。
+   *
+   * CRC 在 pinned buffer 阶段计算（backend 读完 → RDMA 推送前），让 client
+   * 做 end-to-end 校验。crc32c==0 表示 empty / 未计算。
+   */
+  struct GetChunkOutcome {
+    std::string   rdma_reply;
+    std::uint32_t crc32c{0};
+  };
+
+  /**
    * @brief Server-side RDMA WRITE: reads `length` bytes from backend at
    *        `object_offset` and pushes them to the client GPU.
    */
-  [[nodiscard]] Result<std::string>
+  [[nodiscard]] Result<GetChunkOutcome>
     GetChunk(const core::Session& session, const std::string& rdma_token,
              std::uint64_t object_offset, std::uint64_t length);
 

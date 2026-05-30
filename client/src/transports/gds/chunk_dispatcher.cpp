@@ -68,6 +68,7 @@ Result<ChunkDispatcher::Outcome> ChunkDispatcher::Dispatch(const std::string& rd
       .rdma_reply = response.value().rdma_reply(),
       .etag = response.value().etag(),
       .version = response.value().version(),
+      .crc32c = response.value().crc32c(),
   });
 }
 
