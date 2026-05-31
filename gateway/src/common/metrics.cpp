@@ -39,6 +39,12 @@ Metrics::Metrics()
       http_get_latency_us("gateway_http_get_latency_us"),
       http_head_latency_us("gateway_http_head_latency_us"),
       http_rejected_total("gateway_http_rejected_total"),
+      http_put_inflight("gateway_http_put_inflight"),
+      http_get_inflight("gateway_http_get_inflight"),
+      http_head_inflight("gateway_http_head_inflight"),
+      http_put_inflight_aborted_total("gateway_http_put_inflight_aborted_total"),
+      http_get_inflight_aborted_total("gateway_http_get_inflight_aborted_total"),
+      http_head_inflight_aborted_total("gateway_http_head_inflight_aborted_total"),
       backend_write_total("gateway_backend_write_total"),
       backend_read_total("gateway_backend_read_total"),
       backend_write_bytes("gateway_backend_write_bytes"),
@@ -61,6 +67,19 @@ ScopedLatency::ScopedLatency(bvar::LatencyRecorder& recorder)
 
 ScopedLatency::~ScopedLatency() {
   recorder_ << (NowUs() - start_us_);
+}
+
+ScopedHttpInflight::ScopedHttpInflight(bvar::Adder<std::int64_t>& inflight,
+                                        bvar::Adder<std::int64_t>& aborted)
+    : inflight_(inflight), aborted_counter_(aborted) {
+  inflight_ << 1;
+}
+
+ScopedHttpInflight::~ScopedHttpInflight() {
+  inflight_ << -1;
+  if (aborted_) {
+    aborted_counter_ << 1;
+  }
 }
 
 }  // namespace us3_turbo_access::gateway::common

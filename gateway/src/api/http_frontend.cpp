@@ -414,9 +414,12 @@ void HttpFrontend::HandleVars(brpc::Controller* cntl, const std::string& path) {
 void HttpFrontend::HandleHead(brpc::Controller* cntl, const std::string& bucket,
                               const std::string& key) {
   common::ScopedLatency latency(common::metrics().http_head_latency_us);
+  common::ScopedHttpInflight inflight(common::metrics().http_head_inflight,
+                                       common::metrics().http_head_inflight_aborted_total);
   auto head = metadata_.Head(bucket, key);
   if (!head.success()) {
     common::metrics().http_head_fail_total << 1;
+    inflight.MarkAborted();
     WriteError(cntl, gateway_id_, head.error());
     return;
   }
@@ -432,9 +435,12 @@ void HttpFrontend::HandleHead(brpc::Controller* cntl, const std::string& bucket,
 void HttpFrontend::HandleGet(brpc::Controller* cntl, const std::string& bucket,
                              const std::string& key) {
   common::ScopedLatency latency(common::metrics().http_get_latency_us);
+  common::ScopedHttpInflight inflight(common::metrics().http_get_inflight,
+                                       common::metrics().http_get_inflight_aborted_total);
   auto head = metadata_.Head(bucket, key);
   if (!head.success()) {
     common::metrics().http_get_fail_total << 1;
+    inflight.MarkAborted();
     WriteError(cntl, gateway_id_, head.error());
     return;
   }
@@ -443,6 +449,7 @@ void HttpFrontend::HandleGet(brpc::Controller* cntl, const std::string& bucket,
       common::ParseHttpRange(range_header, head.value().content_length);
   if (range.unsatisfiable) {
     common::metrics().http_get_fail_total << 1;
+    inflight.MarkAborted();
     WriteError(cntl, gateway_id_,
                common::MakeError(ErrorCode::kRangeNotSatisfiable,
                                 "range not satisfiable"));
@@ -452,6 +459,7 @@ void HttpFrontend::HandleGet(brpc::Controller* cntl, const std::string& bucket,
   auto report = http_.Get(bucket, key, range.offset, range.length, sink);
   if (!report.success()) {
     common::metrics().http_get_fail_total << 1;
+    inflight.MarkAborted();
     WriteError(cntl, gateway_id_, report.error());
     return;
   }
@@ -483,6 +491,8 @@ void HttpFrontend::HandleGet(brpc::Controller* cntl, const std::string& bucket,
 void HttpFrontend::HandlePut(brpc::Controller* cntl, const std::string& bucket,
                              const std::string& key) {
   common::ScopedLatency latency(common::metrics().http_put_latency_us);
+  common::ScopedHttpInflight inflight(common::metrics().http_put_inflight,
+                                       common::metrics().http_put_inflight_aborted_total);
 
   // 413 上限：先看 Content-Length 声明（若有），再以实际收到的 attachment.size()
   // 兜底。两者任一超过 max_put_bytes_ 即拒。max_put_bytes_=0 表示不限。
@@ -492,6 +502,7 @@ void HttpFrontend::HandlePut(brpc::Controller* cntl, const std::string& bucket,
       ((declared.has_value() && *declared > max_put_bytes_) ||
        actual > max_put_bytes_)) {
     common::metrics().http_put_fail_total << 1;
+    inflight.MarkAborted();
     const std::uint64_t shown = declared.value_or(actual);
     WriteError(cntl, gateway_id_,
                common::MakeError(ErrorCode::kPayloadTooLarge,
@@ -508,6 +519,7 @@ void HttpFrontend::HandlePut(brpc::Controller* cntl, const std::string& bucket,
   auto report = http_.Put(bucket, key, body, expected_crc);
   if (!report.success()) {
     common::metrics().http_put_fail_total << 1;
+    inflight.MarkAborted();
     WriteError(cntl, gateway_id_, report.error());
     return;
   }
