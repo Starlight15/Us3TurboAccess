@@ -167,6 +167,17 @@ Result<TransferOutcome> GdsTransferPath::PutObject(const RequestOptions& request
     return Result<TransferOutcome>::Failure(MakeGdsUnsupportedError());
   }
 
+  // 入口拒：与 gateway 端 cuObjServer 1 GiB chunk 限制对齐，避免发到 server 才被拒。
+  const auto max_put = context_.options.gds.put_single_max_bytes;
+  if (max_put != 0 && buffer.size > max_put) {
+    return Result<TransferOutcome>::Failure(MakeError(
+        ErrorCode::kPayloadTooLarge,
+        "GDS PUT body " + std::to_string(buffer.size) +
+            " exceeds gds.put_single_max_bytes " + std::to_string(max_put) +
+            "; use multipart upload",
+        /*retryable=*/false));
+  }
+
   // PUT 幂等覆写：retryable 错误自动重试，每次重做 OpenSession + ExecutePut。
   // 失败时 best-effort abort server 端 session，避免重试导致 server 端
   // session 积压（GDS 通路没有像 RDMA 那样的专用 AbortSession 数据面，
@@ -195,6 +206,16 @@ Result<TransferOutcome> GdsTransferPath::PutObjectPart(
     const std::string& upload_id, std::uint32_t part_number) const {
   if (!available()) {
     return Result<TransferOutcome>::Failure(MakeGdsUnsupportedError());
+  }
+
+  // 入口拒：part size 也受 1 GiB chunk 限制约束。
+  const auto max_put = context_.options.gds.put_single_max_bytes;
+  if (max_put != 0 && buffer.size > max_put) {
+    return Result<TransferOutcome>::Failure(MakeError(
+        ErrorCode::kPayloadTooLarge,
+        "GDS UploadPart body " + std::to_string(buffer.size) +
+            " exceeds gds.put_single_max_bytes " + std::to_string(max_put),
+        /*retryable=*/false));
   }
 
   // 单 part 幂等（同 part_number 覆盖），可重试。

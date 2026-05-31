@@ -253,6 +253,19 @@ Result<TransferOutcome> RdmaTransferPath::PutObject(const RequestOptions& reques
   auto pre = PreflightRdma(available(), buffer.type);
   if (!pre.success()) return Result<TransferOutcome>::Failure(pre.error());
 
+  // 入口拒：与 NIC max_msg 上限对齐（之前要等 DiscoverEndpoint 拿到 server
+  // 端 max_msg_bytes 才校验，一来一回浪费一次 RPC）。HTTP put_single_max_bytes
+  // 是同款思路。
+  if (buffer.size > options_.rdma.max_msg_bytes) {
+    return Result<TransferOutcome>::Failure(MakeError(
+        ErrorCode::kPayloadTooLarge,
+        "RDMA PUT body " + std::to_string(buffer.size) +
+            " exceeds rdma.max_msg_bytes " +
+            std::to_string(options_.rdma.max_msg_bytes) +
+            "; use multipart upload",
+        /*retryable=*/false));
+  }
+
   // PUT 是幂等覆写（gateway 按 bucket/key 整体覆盖），retryable 错误自动重试。
   // 每次尝试都重做 PrepareAndWrite（OpenSession+WRITE）：session_id / MR 都是
   // 一次性的，重试必须重新走完整流程。
@@ -313,6 +326,16 @@ Result<TransferOutcome> RdmaTransferPath::PutObjectPart(
   if (upload_id.empty() || part_number == 0) {
     return Result<TransferOutcome>::Failure(MakeInvalidArgument(
         "PutObjectPart 需要非空 upload_id 与 part_number>=1"));
+  }
+
+  // 入口拒：part size 同样受 max_msg_bytes 约束。
+  if (buffer.size > options_.rdma.max_msg_bytes) {
+    return Result<TransferOutcome>::Failure(MakeError(
+        ErrorCode::kPayloadTooLarge,
+        "RDMA UploadPart body " + std::to_string(buffer.size) +
+            " exceeds rdma.max_msg_bytes " +
+            std::to_string(options_.rdma.max_msg_bytes),
+        /*retryable=*/false));
   }
 
   // 单 part 上传幂等（同 part_number 覆盖），可重试。

@@ -27,6 +27,13 @@ struct GdsClientOptions {
   std::size_t parallel_get_threshold{64ULL * 1024 * 1024};
   /** Number of parallel sub-ranges issued by split GETs. */
   std::size_t parallel_get_chunks{4};
+
+  /**
+   * 单次 GDS PUT/UploadPart 的上限（client 入口拒）。与 gateway 端
+   * cuObjServer 的 1 GiB chunk 上限对齐，避免发到 server 才被拒。
+   * 0 表示不限。
+   */
+  std::size_t put_single_max_bytes{1ULL * 1024 * 1024 * 1024};
 };
 
 /**
