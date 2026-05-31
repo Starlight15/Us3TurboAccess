@@ -99,14 +99,21 @@ class RdmaExecutor final : public IDataPathExecutor {
   [[nodiscard]] Result<RdmaBindInfo>
     BindSessionToConnection(std::string_view session_id, std::uint64_t conn_token);
 
-  /** CommitObject RPC 入口：触发单对象 PUT 落盘 + 释放 session 级 buffer。*/
+  /**
+   * CommitObject RPC 入口：触发单对象 PUT 落盘 + 释放 session 级 buffer。
+   * client_crc32c_b64 非空时 server 端会比对 pinned buffer 实算 CRC，
+   * 不匹配返回 kInvalidArgument 拒绝 commit（buffer 仍被 session_registry
+   * 通过 AbortSession 路径清理）。
+   */
   [[nodiscard]] Result<RdmaCommitInfo>
-    CommitObject(std::string_view session_id, std::uint64_t bytes_transferred);
+    CommitObject(std::string_view session_id, std::uint64_t bytes_transferred,
+                 std::string_view client_crc32c_b64 = {});
 
-  /** CommitPart RPC 入口：触发 multipart part 落盘。*/
+  /** CommitPart RPC 入口：触发 multipart part 落盘。client_crc32c_b64 校验语义同 CommitObject。 */
   [[nodiscard]] Result<RdmaCommitPartInfo>
     CommitPart(std::string_view session_id, std::string_view upload_id,
-               std::uint32_t part_number, std::uint64_t bytes_transferred);
+               std::uint32_t part_number, std::uint64_t bytes_transferred,
+               std::string_view client_crc32c_b64 = {});
 
   /** AbortSession RPC 入口：客户端失败路径调用，释放该 session 的 buffer/MR。
    *  返回是否实际擦除了一条 entry（不存在视为 no-op，仍返回 success）。*/

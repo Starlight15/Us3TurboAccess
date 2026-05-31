@@ -88,6 +88,13 @@ struct RdmaClientOptions {
   std::chrono::milliseconds connect_timeout{std::chrono::seconds(5)};
 
   /**
+   * 算 CRC32C 写到 CommitObject/CommitPart 的 client_checksum 字段，让 server
+   * 端在 commit 时与 pinned buffer 端实算 CRC 比对，不一致拒绝 commit。
+   * 与 HTTP 对齐的 end-to-end 校验机制。
+   */
+  bool send_crc32c{true};
+
+  /**
    * Object length above which GetObject splits into parallel sub-ranges
    * (reserved for future RDMA GET implementation; not used today).
    * 默认 32 MiB；RDMA 单 WRITE 已是高吞吐，阈值偏高即可。

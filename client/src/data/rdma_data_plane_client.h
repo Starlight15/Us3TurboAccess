@@ -53,13 +53,20 @@ class RdmaDataPlaneClient {
     BindSessionToConnection(const std::string& session_id,
                             std::uint64_t conn_token) const;
 
+  /**
+   * 提交整对象 RDMA WRITE。client_crc32c 非空时携带 client 端算出的 CRC32C
+   * （已 base64 编码），server 端在 commit 时与 pinned buffer 的 CRC 比对，
+   * 不一致会拒绝 commit 并返回 kInvalidArgument。
+   */
   [[nodiscard]] Result<RdmaCommitInfo>
     CommitObject(const std::string& session_id,
-                 std::uint64_t bytes_transferred) const;
+                 std::uint64_t bytes_transferred,
+                 const std::string& client_crc32c_b64 = {}) const;
 
   [[nodiscard]] Result<RdmaCommitPartInfo>
     CommitPart(const std::string& session_id, const std::string& upload_id,
-               std::uint32_t part_number, std::uint64_t bytes_transferred) const;
+               std::uint32_t part_number, std::uint64_t bytes_transferred,
+               const std::string& client_crc32c_b64 = {}) const;
 
   /** PUT 失败路径调用：让 gateway 立即释放该 session 的 buffer/MR。Best-effort。*/
   [[nodiscard]] Result<bool>

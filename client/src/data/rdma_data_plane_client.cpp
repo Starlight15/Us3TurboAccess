@@ -81,7 +81,8 @@ Result<RdmaBindInfo> RdmaDataPlaneClient::BindSessionToConnection(
 }
 
 Result<RdmaCommitInfo> RdmaDataPlaneClient::CommitObject(
-    const std::string& session_id, std::uint64_t bytes_transferred) const {
+    const std::string& session_id, std::uint64_t bytes_transferred,
+    const std::string& client_crc32c_b64) const {
   if (!initialized()) {
     return Result<RdmaCommitInfo>::Failure(MakeNotInitialized("RDMA data plane client"));
   }
@@ -90,6 +91,9 @@ Result<RdmaCommitInfo> RdmaDataPlaneClient::CommitObject(
   us3_turbo_access::gateway::RdmaCommitRequest req;
   req.set_session_id(session_id);
   req.set_bytes_transferred(bytes_transferred);
+  if (!client_crc32c_b64.empty()) {
+    req.set_client_checksum(client_crc32c_b64);
+  }
   us3_turbo_access::gateway::RdmaCommitResponse resp;
   stub_->CommitObject(&controller, &req, &resp, nullptr);
   auto status = CheckRpcFailure(controller, "CommitObject RPC failed",
@@ -124,7 +128,8 @@ Result<bool> RdmaDataPlaneClient::AbortSession(
 
 Result<RdmaCommitPartInfo> RdmaDataPlaneClient::CommitPart(
     const std::string& session_id, const std::string& upload_id,
-    std::uint32_t part_number, std::uint64_t bytes_transferred) const {
+    std::uint32_t part_number, std::uint64_t bytes_transferred,
+    const std::string& client_crc32c_b64) const {
   if (!initialized()) {
     return Result<RdmaCommitPartInfo>::Failure(MakeNotInitialized("RDMA data plane client"));
   }
@@ -135,6 +140,9 @@ Result<RdmaCommitPartInfo> RdmaDataPlaneClient::CommitPart(
   req.set_upload_id(upload_id);
   req.set_part_number(part_number);
   req.set_bytes_transferred(bytes_transferred);
+  if (!client_crc32c_b64.empty()) {
+    req.set_client_checksum(client_crc32c_b64);
+  }
   us3_turbo_access::gateway::RdmaCommitPartResponse resp;
   stub_->CommitPart(&controller, &req, &resp, nullptr);
   auto status = CheckRpcFailure(controller, "CommitPart RPC failed",

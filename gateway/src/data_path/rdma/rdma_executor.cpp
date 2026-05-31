@@ -5,8 +5,13 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <optional>
+#include <span>
+#include <string_view>
 #include <utility>
+#include <vector>
 
+#include "common/crc32c.h"
 #include "common/error.h"
 #include "core/metadata/metadata_service.h"
 #include "core/multipart/multipart_coordinator.h"
@@ -22,6 +27,65 @@ namespace us3_turbo_access::gateway::data_path::rdma {
 namespace {
 
 constexpr std::size_t kPageSize = 4096;
+
+// 解码 client 传来的 base64(big-endian u32) → uint32 CRC32C。
+// 格式与 HTTP 路径的 x-amz-checksum-crc32c 一致；解析失败返回 nullopt。
+[[nodiscard]] std::optional<std::uint32_t>
+ParseClientCrc32c(std::string_view s) {
+  if (s.empty()) return std::nullopt;
+  auto idx_of = [](char c) -> int {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+  };
+  std::vector<std::uint8_t> out;
+  std::uint32_t buf = 0;
+  int bits = 0;
+  for (char c : s) {
+    if (c == '=') break;
+    int v = idx_of(c);
+    if (v < 0) return std::nullopt;
+    buf = (buf << 6) | static_cast<std::uint32_t>(v);
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out.push_back(static_cast<std::uint8_t>((buf >> bits) & 0xFFu));
+    }
+  }
+  if (out.size() < 4) return std::nullopt;
+  return (static_cast<std::uint32_t>(out[0]) << 24) |
+         (static_cast<std::uint32_t>(out[1]) << 16) |
+         (static_cast<std::uint32_t>(out[2]) << 8) |
+         static_cast<std::uint32_t>(out[3]);
+}
+
+// 验证 client_crc32c 是否与 server 端 pinned buffer 实算 CRC 一致。
+// client_crc_b64 为空表示 client 没发送（向后兼容），返回 success。
+[[nodiscard]] Result<bool>
+VerifyClientCrc32c(std::span<const std::byte> view,
+                   std::string_view client_crc_b64) {
+  if (client_crc_b64.empty()) {
+    return Result<bool>::Success(true);  // client 未发，跳过校验
+  }
+  auto client_crc = ParseClientCrc32c(client_crc_b64);
+  if (!client_crc) {
+    return Result<bool>::Failure(common::MakeError(
+        ErrorCode::kBadRequest,
+        "invalid client_checksum format (expected base64 of big-endian uint32)"));
+  }
+  const auto server_crc = common::Crc32c(view);
+  if (*client_crc != server_crc) {
+    return Result<bool>::Failure(common::MakeError(
+        ErrorCode::kInvalidArgument,
+        "RDMA commit CRC32C mismatch: client=" +
+            std::to_string(*client_crc) + " server=" +
+            std::to_string(server_crc)));
+  }
+  return Result<bool>::Success(true);
+}
 
 [[nodiscard]] Error MakeRdmaError(std::string message) {
   Error err;
@@ -290,7 +354,8 @@ Result<RdmaBindInfo> RdmaExecutor::BindSessionToConnection(
 }
 
 Result<RdmaCommitInfo> RdmaExecutor::CommitObject(std::string_view session_id,
-                                                    std::uint64_t bytes_transferred) {
+                                                    std::uint64_t bytes_transferred,
+                                                    std::string_view client_crc32c_b64) {
   auto entry = session_registry_ != nullptr
                    ? session_registry_->Find(session_id)
                    : nullptr;
@@ -311,6 +376,14 @@ Result<RdmaCommitInfo> RdmaExecutor::CommitObject(std::string_view session_id,
   std::span<const std::byte> view(
       static_cast<const std::byte*>(entry->buffer_data),
       static_cast<std::size_t>(bytes_transferred));
+
+  // 端到端 CRC 校验：client_crc32c_b64 非空时与 server 算的 CRC 比对，
+  // 不一致拒绝 commit；buffer/session 会被 AbortSession 路径或 sweeper 清理。
+  auto verify = VerifyClientCrc32c(view, client_crc32c_b64);
+  if (!verify.success()) {
+    return Result<RdmaCommitInfo>::Failure(verify.error());
+  }
+
   auto write = backend_.WriteRange(
       entry->bucket, entry->object_key, /*offset=*/0, view,
       static_cast<std::size_t>(bytes_transferred));
@@ -345,7 +418,8 @@ Result<bool> RdmaExecutor::AbortSession(std::string_view session_id) {
 
 Result<RdmaCommitPartInfo> RdmaExecutor::CommitPart(
     std::string_view session_id, std::string_view upload_id,
-    std::uint32_t part_number, std::uint64_t bytes_transferred) {
+    std::uint32_t part_number, std::uint64_t bytes_transferred,
+    std::string_view client_crc32c_b64) {
   auto entry = session_registry_ != nullptr
                    ? session_registry_->Find(session_id)
                    : nullptr;
@@ -377,6 +451,13 @@ Result<RdmaCommitPartInfo> RdmaExecutor::CommitPart(
   std::span<const std::byte> view(
       static_cast<const std::byte*>(entry->buffer_data),
       static_cast<std::size_t>(bytes_transferred));
+
+  // 端到端 CRC 校验（与 CommitObject 对称）。
+  auto verify = VerifyClientCrc32c(view, client_crc32c_b64);
+  if (!verify.success()) {
+    return Result<RdmaCommitPartInfo>::Failure(verify.error());
+  }
+
   auto part = backend_.WritePart(upload->backend_upload_id, part_number,
                                   /*offset=*/0, view);
   if (!part.success()) {

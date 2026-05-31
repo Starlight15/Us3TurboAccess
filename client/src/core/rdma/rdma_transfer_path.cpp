@@ -2,7 +2,10 @@
 
 #include <chrono>
 #include <future>
+#include <span>
 #include <utility>
+
+#include "client/src/data/http_crc32c.h"  // Crc32c / Base64Crc32cBigEndian (三通路共享)
 
 #include "client/src/core/common/errors.h"
 #include "client/src/core/contracts/request_builder.h"
@@ -261,9 +264,19 @@ Result<TransferOutcome> RdmaTransferPath::PutObject(const RequestOptions& reques
       return Result<TransferOutcome>::Failure(prepared.error());
     }
 
+    // 算 client CRC32C（host pinned buffer，与 server 端 RDMA WRITE 到的
+    // pinned buffer 字节相同），CommitObject 时让 server 校验。
+    std::string client_crc_b64;
+    if (options_.rdma.send_crc32c && buffer.size > 0 && buffer.data != nullptr) {
+      const auto crc = Crc32c(std::span<const std::byte>(
+          static_cast<const std::byte*>(buffer.data), buffer.size));
+      client_crc_b64 = Base64Crc32cBigEndian(crc);
+    }
+
     auto commit = data_plane_client_.CommitObject(
         prepared.value().session_id,
-        static_cast<std::uint64_t>(buffer.size));
+        static_cast<std::uint64_t>(buffer.size),
+        client_crc_b64);
     if (!commit.success()) {
       (void)data_plane_client_.AbortSession(prepared.value().session_id);
       return Result<TransferOutcome>::Failure(commit.error());
@@ -311,9 +324,18 @@ Result<TransferOutcome> RdmaTransferPath::PutObjectPart(
       return Result<TransferOutcome>::Failure(prepared.error());
     }
 
+    // 算 client CRC32C（与 PutObject 路径同构）让 server 端 CommitPart 校验。
+    std::string client_crc_b64;
+    if (options_.rdma.send_crc32c && buffer.size > 0 && buffer.data != nullptr) {
+      const auto crc = Crc32c(std::span<const std::byte>(
+          static_cast<const std::byte*>(buffer.data), buffer.size));
+      client_crc_b64 = Base64Crc32cBigEndian(crc);
+    }
+
     auto commit = data_plane_client_.CommitPart(
         prepared.value().session_id, upload_id, part_number,
-        static_cast<std::uint64_t>(buffer.size));
+        static_cast<std::uint64_t>(buffer.size),
+        client_crc_b64);
     if (!commit.success()) {
       (void)data_plane_client_.AbortSession(prepared.value().session_id);
       return Result<TransferOutcome>::Failure(commit.error());

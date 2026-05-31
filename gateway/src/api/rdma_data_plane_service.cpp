@@ -56,7 +56,8 @@ void RdmaDataPlaneService::CommitObject(
   brpc::ClosureGuard done_guard(done);
   auto* cntl = static_cast<brpc::Controller*>(cntl_base);
   auto info = executor_.CommitObject(request->session_id(),
-                                       request->bytes_transferred());
+                                       request->bytes_transferred(),
+                                       request->client_checksum());
   if (!info.success()) {
     cntl->SetFailed(info.error().message);
     return;
@@ -89,7 +90,7 @@ void RdmaDataPlaneService::CommitPart(
   auto* cntl = static_cast<brpc::Controller*>(cntl_base);
   auto info = executor_.CommitPart(
       request->session_id(), request->upload_id(), request->part_number(),
-      request->bytes_transferred());
+      request->bytes_transferred(), request->client_checksum());
   if (!info.success()) {
     cntl->SetFailed(info.error().message);
     return;
