@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <functional>
 #include <future>
@@ -40,12 +41,29 @@ class ClientExecutor {
   template <typename F>
   auto Submit(F&& fn) -> std::future<std::invoke_result_t<F>>;
 
+  /**
+   * 显式排空 + 关闭。返回 true 表示 grace 期内所有 inflight 都退出。
+   * 返回 false 表示 grace 超时仍有 inflight 任务：这种情况下任务可能在
+   * ClientExecutor 销毁后访问 inflight_ → UB；调用方应记 unclean 退出。
+   *
+   * 用法：
+   *   ClientCore::Shutdown 显式调 executor.Shutdown(default_grace=5s)
+   *   ~ClientExecutor 析构兜底（也调，幂等），并在 false 时 log warning
+   */
+  bool Shutdown(std::chrono::milliseconds grace);
+
+  /** 累计的"不洁退出"次数（grace 超时 + 仍有 inflight）。调试用。 */
+  [[nodiscard]] std::int64_t unclean_shutdowns() const noexcept {
+    return unclean_shutdowns_.load(std::memory_order_acquire);
+  }
+
  private:
   // 每个 Submit 任务的 trampoline 入口，bthread_start_background 调用。
   static void* TaskEntry(void* arg);
 
   std::atomic<bool>             stop_{false};
   std::atomic<std::int64_t>     inflight_{0};
+  std::atomic<std::int64_t>     unclean_shutdowns_{0};
 };
 
 template <typename F>

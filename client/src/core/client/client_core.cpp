@@ -1,6 +1,7 @@
 #include "client/src/core/client/client_core.h"
 
 #include <algorithm>
+#include <chrono>
 #include <thread>
 
 #include "client/src/control/metadata_client.h"
@@ -137,7 +138,12 @@ Result<bool> ClientCore::Initialize() {
 }
 
 void ClientCore::Shutdown() {
-  // 先关掉 executor，确保所有 *Async 任务跑完再拆下层组件。
+  // 先显式 Shutdown(grace=5s) 让 executor 排空 inflight bthread，再 reset。
+  // C.1 后：grace 内排空返 true → 安全；超时返 false → 累计 unclean_shutdowns
+  // 计数，调用方可以查 async_executor().unclean_shutdowns() 排查。
+  if (impl_->async_executor) {
+    (void)impl_->async_executor->Shutdown(std::chrono::seconds(5));
+  }
   impl_->async_executor.reset();
   impl_->upload_coordinator.reset();
   impl_->metadata_client.Shutdown();
