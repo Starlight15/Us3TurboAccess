@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include <brpc/channel.h>
@@ -37,10 +38,18 @@ class ChannelRegistry {
 
   [[nodiscard]] const ClientOptions& options() const noexcept { return options_; }
 
+  /**
+   * 构造期 Initialize 失败时保存的错误（之前是 (void) 静默丢弃）；
+   * 后续 client.Initialize 调用方可以查这个拿到原始原因，便于诊断
+   * "为什么 baidu_std() 返回 nullptr"。无失败时返 std::nullopt。
+   */
+  [[nodiscard]] std::optional<Error> last_init_error() const { return last_init_error_; }
+
  private:
   const ClientOptions&            options_;
   std::string                     endpoint_;
   std::unique_ptr<brpc::Channel>  baidu_;
+  std::optional<Error>            last_init_error_;
 };
 
 }  // namespace us3_turbo_access::client
