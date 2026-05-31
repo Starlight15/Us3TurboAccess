@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "us3_turbo_access/client/result.h"
+#include "us3_turbo_access/client/types.h"
 
 namespace us3_turbo_access::client {
 
@@ -26,8 +27,8 @@ class ClientCore;
  * Server 端 upload_id 命名空间是共享的（同一 MultipartStore），但通过 data_path
  * 校验保证使用语义上的隔离。
  *
- * 数据面（UploadPart 的字节传输）仍走 TransferPath::PutObjectPart，
- * Coordinator 不涉及。
+ * 数据面（B.4 后）：UploadPart 也走 Coordinator 透明分发，三个 TransferPath
+ * 的 PutObjectPart 实际都在这里聚合，不再由 client.cpp 用 switch 自己 fanout。
  */
 class UploadCoordinator {
  public:
@@ -74,6 +75,22 @@ class UploadCoordinator {
    */
   [[nodiscard]] Result<bool>
     AbortUpload(DataPath data_path, const std::string& upload_id);
+
+  /**
+   * UploadPart: 数据面收敛入口。按 data_path 分发到对应 TransferPath::PutObjectPart：
+   *   - kHttpTcp    : core.http_transfer_path().PutObjectPart
+   *   - kNativeRdma : core.rdma_transfer_path().PutObjectPart
+   *   - kGdsCuObject: core.gds_transfer_path().PutObjectPart
+   *
+   * 三通路差异（length / expected_size 语义）由这里统一组装 RequestOptions：
+   *   - HTTP/RDMA: length = buffer.size 让 server 端能预分配 buffer
+   *   - GDS:       length 留空保留原"expected_size=0 跳过整对象 Reserve"行为
+   */
+  [[nodiscard]] Result<TransferOutcome>
+    UploadPart(DataPath data_path, const ObjectId& object,
+               const std::string& checksum_policy,
+               const std::string& upload_id, std::uint32_t part_number,
+               std::uint64_t object_offset, ConstBufferView buffer);
 
  private:
   ClientCore& core_;

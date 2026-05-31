@@ -75,66 +75,8 @@ void MultipartUpload::set_checksum_policy(std::string policy) {
   impl_->checksum_policy = std::move(policy);
 }
 
-namespace {
-
-// GDS 单 part：透传到 GdsTransferPath::PutObjectPart（与 RDMA/HTTP 对齐）。
-// 内部 expected_size=0 跳过整对象 Reserve，最终走 cuobj.ExecutePutPart。
-Result<TransferOutcome> UploadPartGds(ClientCore& core,
-                                       const ObjectId& object,
-                                       const std::string& checksum_policy,
-                                       const std::string& upload_id,
-                                       std::uint32_t part_number,
-                                       std::uint64_t object_offset,
-                                       ConstBufferView buffer) {
-  RequestOptions request;
-  request.object = object;
-  request.offset = object_offset;
-  // length 留空：cuObj 走 buffer.size（cuobject_client 内部 fallback），
-  // 让 expected_size=0 保留 GDS 原来的 Reserve 跳过行为。
-  request.checksum_policy = checksum_policy;
-  return core.gds_transfer_path().PutObjectPart(request, buffer, upload_id,
-                                                  part_number);
-}
-
-// RDMA 单 part 实现：走 RdmaTransferPath::PutObjectPart；
-// expected_size = part_size 让 BindSession 阶段能分配 buffer，
-// is_multipart_part=true 让 gateway 跳过整对象 Reserve。
-Result<TransferOutcome> UploadPartRdma(const ClientCore& core,
-                                        const ObjectId& object,
-                                        const std::string& checksum_policy,
-                                        const std::string& upload_id,
-                                        std::uint32_t part_number,
-                                        std::uint64_t object_offset,
-                                        ConstBufferView buffer) {
-  RequestOptions request;
-  request.object          = object;
-  request.offset          = object_offset;
-  request.length          = buffer.size;     // 让 expected_size>0
-  request.checksum_policy = checksum_policy;
-  return core.rdma_transfer_path().PutObjectPart(request, buffer, upload_id,
-                                                   part_number);
-}
-
-// HTTP 单 part 实现：与 RDMA 对偶，走 HttpTransferPath::PutObjectPart（内部 PUT
-// /v1/uploads/{upload_id}?partNumber=N）。HTTP 不走 control plane session，
-// expected_total_size 由 StartUpload 阶段一次性带过去即可。
-Result<TransferOutcome> UploadPartHttp(const ClientCore& core,
-                                        const ObjectId& object,
-                                        const std::string& checksum_policy,
-                                        const std::string& upload_id,
-                                        std::uint32_t part_number,
-                                        std::uint64_t object_offset,
-                                        ConstBufferView buffer) {
-  RequestOptions request;
-  request.object          = object;
-  request.offset          = object_offset;
-  request.length          = buffer.size;
-  request.checksum_policy = checksum_policy;
-  return core.http_transfer_path().PutObjectPart(request, buffer, upload_id,
-                                                   part_number);
-}
-
-}  // namespace
+// B.4 后：UploadPart{Gds,Rdma,Http} 三个 helper 删除，逻辑收敛进
+// UploadCoordinator::UploadPart 统一组装 RequestOptions + 按 path 分发。
 
 // 上传单个 part：开 session → 走 path 对应数据面 → 记录 (part_number, etag)。
 Result<TransferOutcome> MultipartUpload::UploadPart(std::uint32_t part_number,
@@ -162,27 +104,14 @@ Result<TransferOutcome> MultipartUpload::UploadPart(std::uint32_t part_number,
     checksum_policy = impl_->checksum_policy;
   }
 
-  // 按 data_path 分发：GDS / RDMA 走 control plane + 各自数据面；
-  // HTTP 走纯 HTTP UploadPart 路径。
+  // B.4 后：数据面分发收敛到 UploadCoordinator::UploadPart，client.cpp
+  // 不再自己 switch 三路；coordinator 内部组装 RequestOptions 并按 data_path
+  // 调对应 TransferPath::PutObjectPart。
   ScopedTransferMetric metric(ScopedTransferMetric::Op::kUploadPart,
                                 static_cast<std::int64_t>(buffer.size));
-  Result<TransferOutcome> outcome = Result<TransferOutcome>::Failure(
-      MakeInvalidArgument("unreachable"));
-  switch (impl_->data_path) {
-    case DataPath::kNativeRdma:
-      outcome = UploadPartRdma(*impl_->core, impl_->object, checksum_policy,
-                                impl_->upload_id, part_number, object_offset, buffer);
-      break;
-    case DataPath::kHttpTcp:
-      outcome = UploadPartHttp(*impl_->core, impl_->object, checksum_policy,
-                                impl_->upload_id, part_number, object_offset, buffer);
-      break;
-    case DataPath::kGdsCuObject:
-    default:
-      outcome = UploadPartGds(*impl_->core, impl_->object, checksum_policy,
-                                impl_->upload_id, part_number, object_offset, buffer);
-      break;
-  }
+  auto outcome = impl_->core->upload_coordinator().UploadPart(
+      impl_->data_path, impl_->object, checksum_policy, impl_->upload_id,
+      part_number, object_offset, buffer);
   if (outcome.success()) metric.MarkSuccess();
   if (!outcome.success()) {
     return outcome;

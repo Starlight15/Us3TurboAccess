@@ -2,6 +2,9 @@
 
 #include "client/src/control/metadata_client.h"
 #include "client/src/core/client/client_core.h"
+#include "client/src/core/gds/gds_transfer_path.h"
+#include "client/src/core/http/http_transfer_path.h"
+#include "client/src/core/rdma/rdma_transfer_path.h"
 #include "client/src/data/http_data_client.h"
 
 namespace us3_turbo_access::client {
@@ -87,6 +90,37 @@ Result<bool> UploadCoordinator::AbortUpload(DataPath data_path,
     return core_.http_data_client().AbortUpload(upload_id);
   }
   return core_.metadata_client().AbortUpload(upload_id, data_path);
+}
+
+// 数据面收敛：把 client.cpp 中三个 UploadPart{Http,Rdma,Gds} helper 聚合
+// 进来。三通路差异：
+//   HTTP/RDMA: length=buffer.size 让 server 预分配 buffer
+//   GDS:       length 留空（保留 expected_size=0 跳过整对象 Reserve 的行为）
+Result<TransferOutcome> UploadCoordinator::UploadPart(
+    DataPath data_path, const ObjectId& object,
+    const std::string& checksum_policy, const std::string& upload_id,
+    std::uint32_t part_number, std::uint64_t object_offset,
+    ConstBufferView buffer) {
+  RequestOptions request;
+  request.object          = object;
+  request.offset          = object_offset;
+  request.checksum_policy = checksum_policy;
+
+  switch (data_path) {
+    case DataPath::kHttpTcp:
+      request.length = buffer.size;
+      return core_.http_transfer_path().PutObjectPart(request, buffer,
+                                                       upload_id, part_number);
+    case DataPath::kNativeRdma:
+      request.length = buffer.size;  // 让 server 端 BindSession 阶段能分配 buffer
+      return core_.rdma_transfer_path().PutObjectPart(request, buffer,
+                                                       upload_id, part_number);
+    case DataPath::kGdsCuObject:
+    default:
+      // GDS: 不设 length，保留 expected_size=0 跳过整对象 Reserve。
+      return core_.gds_transfer_path().PutObjectPart(request, buffer,
+                                                      upload_id, part_number);
+  }
 }
 
 }  // namespace us3_turbo_access::client
