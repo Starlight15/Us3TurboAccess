@@ -46,6 +46,20 @@ class RdmaTransferPath final : public TransferPath {
     PutObjectPart(const RequestOptions& request, ConstBufferView buffer,
                   const std::string& upload_id, std::uint32_t part_number) const;
 
+  // C.6: 把原匿名 ns 中 PrepareAndWrite 自由函数（8 参数引用传递）改为类方法。
+  // 未来 RDMA GET 实现可以复用前 4 步（OpenSession / DiscoverEndpoint / Pool.Acquire
+  // / BindSessionToConnection），只重写第 5/6 步（READ 而非 WRITE）。
+  //
+  // 当前阶段不再拆 OpenAndPrepare + ExecuteWrite 两步，保留一个方法即可；
+  // 关键收益是把 8 个引用参数收敛到成员访问。
+  // public 是因为定义在 .cpp 中的 PrepareAndWrite 自由函数返回 RdmaWritePrepared，
+  // 在 anon ns 内访问需要 public 可见性。
+  struct RdmaWritePrepared;
+  [[nodiscard]] Result<RdmaWritePrepared>
+    PrepareAndWriteImpl(const RequestOptions& request,
+                         ConstBufferView buffer,
+                         bool is_multipart_part) const;
+
  private:
   const ClientOptions&                  options_;
   const MetadataClient&                 metadata_client_;

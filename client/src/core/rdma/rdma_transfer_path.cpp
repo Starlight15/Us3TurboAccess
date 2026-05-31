@@ -56,20 +56,23 @@ Result<TransferOutcome> RdmaTransferPath::GetObject(const RequestOptions&,
       DataPath::kNativeRdma, "RDMA GET not implemented yet"));
 }
 
-namespace {
-
 /*
  * PUT / PUT-part 共享的"开 session + 写完一次 RDMA WRITE"流程产物。Commit
  * 留给调用方做，因为 CommitObject 与 CommitPart 是两个不同的 RPC。
  * handle 在 Commit 成功后随作用域归还连接池复用；Commit 失败时 caller 调
  * AbortSession + 让 handle 自然析构归池（连接本身仍可用）。
+ *
+ * C.6 后定义在 RdmaTransferPath 嵌套作用域，与 PrepareAndWriteImpl 类方法
+ * 一起把原来 anon-ns 的自由函数 + 8 参数引用传递收敛掉。
  */
-struct RdmaWritePrepared {
+struct RdmaTransferPath::RdmaWritePrepared {
   std::string                                       session_id;
   std::string                                       request_id;
   std::string                                       gateway_id;
   ConnectionHandle                                  handle;
 };
+
+namespace {
 
 // 写阶段失败的统一收尾：丢弃连接（不污染池子）+ 通知 server 立即释放 session 的
 // buffer/MR。AbortSession 自身的错误不向上抛——已经在错误路径上，不能掩盖原因。
@@ -96,7 +99,7 @@ void DiscardAndAbort(ConnectionHandle& handle,
  * 失败收尾：第 1 步后任何失败都需要 AbortSession；第 3 步后还要 handle.Discard
  * 把该 QP 丢出池子（远端状态可能已脏）。
  */
-[[nodiscard]] Result<RdmaWritePrepared> PrepareAndWrite(
+[[nodiscard]] Result<RdmaTransferPath::RdmaWritePrepared> PrepareAndWrite(
     const ClientOptions& options, const MetadataClient& metadata,
     const RdmaDataPlaneClient& data_plane, RdmaConnectionPool& pool,
     RdmaCompletionDriver& driver, const RequestOptions& request,
@@ -105,13 +108,13 @@ void DiscardAndAbort(ConnectionHandle& handle,
   // CQ 等待（wait_for）也用 deadline 做超时返回。
   const auto deadline =
       std::chrono::steady_clock::now() + options.request_timeout;
-  auto check_deadline = [&](const char* stage) -> Result<RdmaWritePrepared> {
+  auto check_deadline = [&](const char* stage) -> Result<RdmaTransferPath::RdmaWritePrepared> {
     if (std::chrono::steady_clock::now() >= deadline) {
-      return Result<RdmaWritePrepared>::Failure(MakeError(
+      return Result<RdmaTransferPath::RdmaWritePrepared>::Failure(MakeError(
           ErrorCode::kTimeout,
           std::string("RDMA request_timeout exceeded before ") + stage, true));
     }
-    return Result<RdmaWritePrepared>::Success({});
+    return Result<RdmaTransferPath::RdmaWritePrepared>::Success({});
   };
 
   if (auto d = check_deadline("OpenSession"); !d.success()) return d;
@@ -126,7 +129,7 @@ void DiscardAndAbort(ConnectionHandle& handle,
   auto open_resp = metadata.OpenTransferSession(open_req);
   if (!open_resp.success()) {
     // 这里 server 还没开 session，无需 AbortSession。
-    return Result<RdmaWritePrepared>::Failure(open_resp.error());
+    return Result<RdmaTransferPath::RdmaWritePrepared>::Failure(open_resp.error());
   }
   const std::string session_id = open_resp.value().session_id();
 
@@ -138,11 +141,11 @@ void DiscardAndAbort(ConnectionHandle& handle,
   auto disc = data_plane.DiscoverEndpoint(session_id);
   if (!disc.success()) {
     (void)data_plane.AbortSession(session_id);
-    return Result<RdmaWritePrepared>::Failure(disc.error());
+    return Result<RdmaTransferPath::RdmaWritePrepared>::Failure(disc.error());
   }
   if (buffer.size > disc.value().max_msg_bytes) {
     (void)data_plane.AbortSession(session_id);
-    return Result<RdmaWritePrepared>::Failure(MakeInvalidArgument(
+    return Result<RdmaTransferPath::RdmaWritePrepared>::Failure(MakeInvalidArgument(
         "buffer 超过 gateway max_msg_bytes"));
   }
 
@@ -155,7 +158,7 @@ void DiscardAndAbort(ConnectionHandle& handle,
                               static_cast<std::uint16_t>(disc.value().port));
   if (!handle.success()) {
     (void)data_plane.AbortSession(session_id);
-    return Result<RdmaWritePrepared>::Failure(handle.error());
+    return Result<RdmaTransferPath::RdmaWritePrepared>::Failure(handle.error());
   }
   ConnectionHandle conn_handle = std::move(handle.value());
   auto* conn = conn_handle.conn();
@@ -169,7 +172,7 @@ void DiscardAndAbort(ConnectionHandle& handle,
   auto bound = data_plane.BindSessionToConnection(session_id, conn->conn_token());
   if (!bound.success()) {
     DiscardAndAbort(conn_handle, data_plane, session_id);
-    return Result<RdmaWritePrepared>::Failure(bound.error());
+    return Result<RdmaTransferPath::RdmaWritePrepared>::Failure(bound.error());
   }
   conn->set_remote_buffer(bound.value().raddr, bound.value().rkey);
 
@@ -178,7 +181,7 @@ void DiscardAndAbort(ConnectionHandle& handle,
   auto mr = mr_registry.Register(buffer);
   if (!mr.success()) {
     DiscardAndAbort(conn_handle, data_plane, session_id);
-    return Result<RdmaWritePrepared>::Failure(mr.error());
+    return Result<RdmaTransferPath::RdmaWritePrepared>::Failure(mr.error());
   }
 
   // 6) 注意顺序：必须先 RegisterInflight 抢到 promise，再 PostWrite；
@@ -190,13 +193,13 @@ void DiscardAndAbort(ConnectionHandle& handle,
       bound.value().raddr, bound.value().rkey, wr_id);
   if (!posted.success()) {
     DiscardAndAbort(conn_handle, data_plane, session_id);
-    return Result<RdmaWritePrepared>::Failure(posted.error());
+    return Result<RdmaTransferPath::RdmaWritePrepared>::Failure(posted.error());
   }
   // 阻塞等 WC：用 deadline 控制 CQ 等待时长；超时则丢弃 QP（远端可能仍在写）。
   RdmaCompletion comp{};
   if (fut.wait_until(deadline) != std::future_status::ready) {
     DiscardAndAbort(conn_handle, data_plane, session_id);
-    return Result<RdmaWritePrepared>::Failure(MakeError(
+    return Result<RdmaTransferPath::RdmaWritePrepared>::Failure(MakeError(
         ErrorCode::kTimeout,
         "RDMA WRITE completion timeout (request_timeout exceeded)", true,
         std::string(ToString(DataPath::kNativeRdma))));
@@ -206,25 +209,25 @@ void DiscardAndAbort(ConnectionHandle& handle,
   } catch (const std::exception& e) {
     // 通常意味着 driver Stop / 连接被 Detach；继续也无意义。
     DiscardAndAbort(conn_handle, data_plane, session_id);
-    return Result<RdmaWritePrepared>::Failure(MakeTransportFailure(
+    return Result<RdmaTransferPath::RdmaWritePrepared>::Failure(MakeTransportFailure(
         std::string("RDMA completion driver error: ") + e.what(),
         DataPath::kNativeRdma, "", false));
   }
   if (comp.status != 0) {
     // IBV_WC_SUCCESS==0；非 0 状态对 QP 来说基本是 fatal，连接不能再复用。
     DiscardAndAbort(conn_handle, data_plane, session_id);
-    return Result<RdmaWritePrepared>::Failure(MakeTransportFailure(
+    return Result<RdmaTransferPath::RdmaWritePrepared>::Failure(MakeTransportFailure(
         std::string("RDMA WRITE failed status=") + std::to_string(comp.status),
         DataPath::kNativeRdma, "", false));
   }
 
-  RdmaWritePrepared out;
+  RdmaTransferPath::RdmaWritePrepared out;
   out.session_id = session_id;
   out.request_id = open_resp.value().request_id();
   out.gateway_id = open_resp.value().gateway_id();
   // handle 沿着 out move 出去；只有 Commit 路径才决定它最终是归池还是丢弃。
   out.handle     = std::move(conn_handle);
-  return Result<RdmaWritePrepared>::Success(std::move(out));
+  return Result<RdmaTransferPath::RdmaWritePrepared>::Success(std::move(out));
 }
 
 // RDMA 路径要求页锁定 host 内存：ibv_reg_mr 会失败在普通 malloc 的内存上
@@ -374,6 +377,17 @@ Result<TransferOutcome> RdmaTransferPath::PutObjectPart(
     }
     return Result<TransferOutcome>::Success(std::move(outcome));
   });
+}
+
+// C.6 类方法：把"8 个引用参数"的 PrepareAndWrite 自由函数包装为成员方法，
+// 让未来 RDMA GET 实现能复用前 4 步（OpenSession / DiscoverEndpoint /
+// pool.Acquire / BindSession），无需在 anon ns 里再加一份。
+Result<RdmaTransferPath::RdmaWritePrepared>
+RdmaTransferPath::PrepareAndWriteImpl(const RequestOptions& request,
+                                       ConstBufferView buffer,
+                                       bool is_multipart_part) const {
+  return PrepareAndWrite(options_, metadata_client_, data_plane_client_,
+                          *pool_, *driver_, request, buffer, is_multipart_part);
 }
 
 }  // namespace us3_turbo_access::client
