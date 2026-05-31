@@ -22,12 +22,29 @@ constexpr char kDefaultGatewayId[] = "gateway-local";
   return std::string(prefix) + buf;
 }
 
+// C.3：按 op 选择超时。head/put/get_timeout 为 0 时 fallback 到 request_timeout。
+[[nodiscard]] std::chrono::milliseconds PerOpTimeout(const ClientOptions& options,
+                                                       OperationType op) {
+  switch (op) {
+    case OperationType::kHead:
+      return options.head_timeout.count() > 0 ? options.head_timeout
+                                              : options.request_timeout;
+    case OperationType::kPut:
+      return options.put_timeout.count() > 0 ? options.put_timeout
+                                             : options.request_timeout;
+    case OperationType::kGet:
+      return options.get_timeout.count() > 0 ? options.get_timeout
+                                             : options.request_timeout;
+  }
+  return options.request_timeout;
+}
+
 [[nodiscard]] RpcCallMetadata MakeRpcContext(const ClientOptions& options,
-                                                std::chrono::milliseconds timeout) {
-  // RequestOptions::timeout 0 表示走 ClientOptions::request_timeout（端到端默认）。
-  // 这样三通路的 RPC（OpenSession / DiscoverEndpoint / GdsChunk 等）都尊重统一超时。
+                                                std::chrono::milliseconds timeout,
+                                                OperationType op) {
+  // 优先级：RequestOptions::timeout > per-op timeout > request_timeout
   const auto effective =
-      (timeout.count() <= 0) ? options.request_timeout : timeout;
+      (timeout.count() <= 0) ? PerOpTimeout(options, op) : timeout;
   return RpcCallMetadata{.client_id = options.client_id,
                            .bearer_token = options.bearer_token,
                            .default_headers = options.default_headers,
@@ -39,7 +56,7 @@ constexpr char kDefaultGatewayId[] = "gateway-local";
 SessionOpening MakeSessionHandshake(const ClientOptions& options,
                                             const SessionPlan& input) {
   return SessionOpening{
-      .context = MakeRpcContext(options, input.request.timeout),
+      .context = MakeRpcContext(options, input.request.timeout, input.operation),
       .operation = input.operation,
       .object = input.request.object,
       .data_path = input.path,
@@ -64,7 +81,7 @@ ChunkOp MakeChunkOp(const ClientOptions& options, ChunkOpPlan input) {
       .extra_headers = input.request.extra_headers,
   };
   return ChunkOp{
-      .context = MakeRpcContext(options, input.request.timeout),
+      .context = MakeRpcContext(options, input.request.timeout, input.operation),
       .object = std::move(object),
       .operation = input.operation,
       .request_id = std::move(input.request_id),

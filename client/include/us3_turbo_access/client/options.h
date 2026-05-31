@@ -141,8 +141,24 @@ struct ClientOptions {
    *   RDMA : 在 OpenSession + WRITE 提交 + CQ 等待之间检查 deadline
    *   GDS  : OpenSession 与 PutChunk brpc 调用上 set_timeout_ms
    * 超时统一返回 ErrorCode::kTimeout（retryable=true）。
+   *
+   * 用作 fallback：若下方按 op 拆分的 *_timeout 为 0 则用 request_timeout。
    */
   std::chrono::milliseconds request_timeout{std::chrono::minutes(5)};
+
+  /**
+   * C.3：按 op 拆分超时。0 = 沿用 request_timeout（向后兼容）。
+   *
+   * 建议用法：
+   *   head_timeout: 10s    一次轻量 metadata 调用，5min 过长
+   *   put_timeout:  5min   大对象上传保留 5min 默认
+   *   get_timeout:  5min   同上
+   *
+   * 实现见 contracts/request_builder.cpp::MakeRpcContext 按 op 选择。
+   */
+  std::chrono::milliseconds head_timeout{std::chrono::milliseconds(0)};
+  std::chrono::milliseconds put_timeout{std::chrono::milliseconds(0)};
+  std::chrono::milliseconds get_timeout{std::chrono::milliseconds(0)};
   /** Data transport selected for transfer operations. */
   DataPath data_path{DataPath::kGdsCuObject};
   /** Optional logger; if null, the client falls back to a null sink. */
