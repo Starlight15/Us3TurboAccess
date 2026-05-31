@@ -64,6 +64,15 @@ class MetadataClient {
     AbortUpload(const std::string& upload_id,
                 DataPath data_path) const;
 
+  /**
+   * 通知 server 立即 mark 该 session 为 failed（best-effort）。
+   * 用于 GDS PutObject/PutObjectPart 重试前清理旧 session，避免 server 端
+   * session 积压（GDS 通路与 RDMA 通路不同，没有专门数据面 abort）。
+   * 不存在的 session 视为成功（no-op），返回 erased=false。
+   */
+  [[nodiscard]] Result<bool>
+    AbortSession(const std::string& session_id) const;
+
   /** 供 ApplyRequestTimeout 等访问 options。 */
   [[nodiscard]] const ClientOptions& options() const noexcept { return options_; }
 

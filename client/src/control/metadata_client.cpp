@@ -199,4 +199,27 @@ Result<bool> MetadataClient::AbortUpload(const std::string& upload_id,
   return Result<bool>::Success(true);
 }
 
+Result<bool> MetadataClient::AbortSession(const std::string& session_id) const {
+  if (!initialized()) {
+    return Result<bool>::Failure(MakeNotInitialized("Metadata client"));
+  }
+  const ClientOptions& options = options_;
+  const RpcCallMetadata context{.client_id = options.client_id,
+                                  .bearer_token = options.bearer_token,
+                                  .default_headers = options.default_headers,
+                                  .timeout = options.default_timeout};
+  brpc::Controller controller;
+  ApplyRequestHeaders(controller, context);
+
+  us3_turbo_access::gateway::AbortSessionRequest req;
+  req.set_session_id(session_id);
+  us3_turbo_access::gateway::AbortSessionResponse resp;
+  stub_->AbortSession(&controller, &req, &resp, nullptr);
+  // best-effort：RPC 失败也算 success(false)，不让重试失败干扰主流程
+  if (controller.Failed()) {
+    return Result<bool>::Success(false);
+  }
+  return Result<bool>::Success(resp.erased());
+}
+
 }  // namespace us3_turbo_access::client

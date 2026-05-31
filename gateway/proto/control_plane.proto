@@ -121,12 +121,27 @@ message AbortUploadRequest {
 message AbortUploadResponse {
 }
 
+// 通知 gateway 立即把 session 标记为 failed，释放资源。
+// 与 RdmaDataPlaneService.AbortSession 平行，但走 ControlPlaneService
+// 以便 GDS 通路在 PutObject 重试前清理上一次失败的 session。
+// 不存在的 session_id 视为 no-op，返回 erased=false。
+message AbortSessionRequest {
+  string session_id = 1;
+}
+
+message AbortSessionResponse {
+  bool erased = 1;
+}
+
 service ControlPlaneService {
   rpc OpenSession(OpenSessionRequest)
       returns (OpenSessionResponse);
   rpc HeadObject(HeadObjectRequest) returns (HeadObjectResponse);
   rpc GdsGet(GdsChunkRequest) returns (GdsChunkResponse);
   rpc GdsPut(GdsChunkRequest) returns (GdsChunkResponse);
+
+  // Session lifecycle
+  rpc AbortSession(AbortSessionRequest) returns (AbortSessionResponse);
 
   // Multipart upload
   rpc StartUpload(StartUploadRequest) returns (StartUploadResponse);

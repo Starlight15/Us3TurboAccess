@@ -93,6 +93,12 @@ class ControlPlaneService final : public ::us3_turbo_access::gateway::ControlPla
       ::us3_turbo_access::gateway::AbortUploadResponse* response,
       google::protobuf::Closure* done) override;
 
+  void AbortSession(
+      google::protobuf::RpcController* cntl,
+      const ::us3_turbo_access::gateway::AbortSessionRequest* request,
+      ::us3_turbo_access::gateway::AbortSessionResponse* response,
+      google::protobuf::Closure* done) override;
+
  private:
   // 在 io_pool worker 线程上执行的 RPC handler 实现。
   // OpenSession/GdsGet/GdsPut 的入口把闭包提交进 io_pool；这里是真正干活的函数。

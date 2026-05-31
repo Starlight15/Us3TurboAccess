@@ -168,13 +168,22 @@ Result<TransferOutcome> GdsTransferPath::PutObject(const RequestOptions& request
   }
 
   // PUT 幂等覆写：retryable 错误自动重试，每次重做 OpenSession + ExecutePut。
+  // 失败时 best-effort abort server 端 session，避免重试导致 server 端
+  // session 积压（GDS 通路没有像 RDMA 那样的专用 AbortSession 数据面，
+  // 通过 ControlPlaneService::AbortSession RPC 触发 MarkFailed）。
   return RetryIfRetryable(DefaultRetryPolicy(), [&]() -> Result<TransferOutcome> {
     auto session = OpenSession(context_, OperationType::kPut, request, buffer);
     if (!session.success()) {
       return Result<TransferOutcome>::Failure(session.error());
     }
-    return context_.cuobj_client.ExecutePut(context_.options, context_.data_client,
-                                              session.value(), request, buffer);
+    const std::string session_id = session.value().meta.session_id;
+    auto outcome = context_.cuobj_client.ExecutePut(context_.options, context_.data_client,
+                                                      session.value(), request, buffer);
+    if (!outcome.success()) {
+      // Best-effort 让 server 立即 mark failed，无需等 TTL sweep。
+      (void)context_.metadata_client.AbortSession(session_id);
+    }
+    return outcome;
   });
 }
 
@@ -189,6 +198,7 @@ Result<TransferOutcome> GdsTransferPath::PutObjectPart(
   }
 
   // 单 part 幂等（同 part_number 覆盖），可重试。
+  // 失败时 best-effort abort 旧 session（与 PutObject 同款治理）。
   return RetryIfRetryable(DefaultRetryPolicy(), [&]() -> Result<TransferOutcome> {
     // expected_size = 0：OpenSession 中 length 不带，gateway 不做整对象 Reserve。
     auto registration =
@@ -208,10 +218,15 @@ Result<TransferOutcome> GdsTransferPath::PutObjectPart(
       return Result<TransferOutcome>::Failure(open_response.error());
     }
     auto session = ImportSession(open_response.value());
+    const std::string session_id = session.meta.session_id;
 
-    return context_.cuobj_client.ExecutePutPart(
+    auto outcome = context_.cuobj_client.ExecutePutPart(
         context_.options, context_.data_client, session, request, buffer,
         upload_id, part_number);
+    if (!outcome.success()) {
+      (void)context_.metadata_client.AbortSession(session_id);
+    }
+    return outcome;
   });
 }
 

@@ -361,4 +361,19 @@ void ControlPlaneService::AbortUpload(
   }
 }
 
+// 通知 server 把 session 标记 failed，触发 sweeper 提前回收（无需等 TTL）。
+// 用于 client 重试 OpenSession 前清理上一次失败的 session，避免 server 端
+// session 积压。不存在的 session 视为 no-op，返回 erased=false。
+void ControlPlaneService::AbortSession(
+    google::protobuf::RpcController* cntl_base,
+    const ::us3_turbo_access::gateway::AbortSessionRequest* request,
+    ::us3_turbo_access::gateway::AbortSessionResponse* response,
+    google::protobuf::Closure* done) {
+  brpc::ClosureGuard done_guard(done);
+  (void)cntl_base;  // 不存在的 session 视为 no-op；不让 RPC 失败
+  auto marked = sessions_.MarkFailed(request->session_id());
+  // success 表示找到并 mark；找不到 session 不报错（best-effort）。
+  response->set_erased(marked.success() && marked.value() != nullptr);
+}
+
 }  // namespace us3_turbo_access::gateway::api
