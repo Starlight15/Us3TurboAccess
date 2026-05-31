@@ -18,8 +18,13 @@ class ClientCore;
  *   HTTP 路径   : HttpDataClient   (HTTP REST: POST /v1/uploads/...)
  *   GDS/RDMA 路径: MetadataClient   (baidu_std: ControlPlaneService)
  *
- * Coordinator 仅按 data_path 透明分发，不试图统一两端协议。两端 upload_id
- * 各自独立分配，不可互认（与现有 MultipartUpload 析构兜底逻辑一致）。
+ * Coordinator 仅按 data_path 透明分发，不试图统一两端协议。
+ *
+ * Server 隔离：A.1 后 server 端 MultipartCoordinator 在 Complete/Abort 强校验
+ * upload->data_path 与调用方 data_path 必须一致；跨通路调用（例如 HTTP REST
+ * 试图 Complete 一个 GDS 启动的 upload）会被 server 端 kBadRequest 拒绝。
+ * Server 端 upload_id 命名空间是共享的（同一 MultipartStore），但通过 data_path
+ * 校验保证使用语义上的隔离。
  *
  * 数据面（UploadPart 的字节传输）仍走 TransferPath::PutObjectPart，
  * Coordinator 不涉及。

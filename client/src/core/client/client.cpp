@@ -468,7 +468,9 @@ Result<MultipartUpload> Client::StartUpload(const ObjectId& object,
 
   // UploadCoordinator 透明分发：HTTP 走 /v1/uploads/{bucket}/{key}（HTTP REST），
   // GDS/RDMA 走 ControlPlaneService::StartUpload（baidu_std）。
-  // 两条逻辑各自独立分配 upload_id，互不认。
+  // 注意：server 端 MultipartStore 实际是共享的，upload_id 命名空间也共享，
+  // 但 A.1 后 server 端在 Complete/Abort 强校验 data_path，跨通路调用会被
+  // server 端拒绝（kBadRequest）。client 端这里也按 path 分发避免误用。
   auto out = core_->upload_coordinator().StartUpload(
       path, object, expected_total_size, idempotency_key);
   if (!out.success()) {
