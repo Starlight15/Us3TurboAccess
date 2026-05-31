@@ -51,9 +51,11 @@ Result<StartUploadResult> MultipartCoordinator::StartUpload(
 // 提交 multipart upload。
 // 并发保护：state CAS 到 kCompleting 抢占 owner，重复 Complete 被拒。
 // 校验：part_number 1..N 连续；非末尾 part >= min_part_size；etag 与记录一致。
+// data_path 校验：必须与 StartUpload 时一致，防止跨协议串扰。
 Result<ObjectMetadata> MultipartCoordinator::CompleteUpload(
     std::string_view upload_id,
-    const std::vector<backend::PartRecord>& parts) {
+    const std::vector<backend::PartRecord>& parts,
+    std::string_view expected_data_path) {
   common::ScopedLatency latency(common::metrics().multipart_complete_latency_us);
   if (parts.empty()) {
     common::metrics().multipart_fail_total << 1;
@@ -67,9 +69,18 @@ Result<ObjectMetadata> MultipartCoordinator::CompleteUpload(
         ErrorCode::kNotFound, "multipart upload_id not found"));
   }
   std::string backend_id;
+  std::string upload_data_path;
   std::map<std::uint32_t, PartProgress> recorded_parts;
   {
     std::scoped_lock lock(upload->mu);
+    // data_path 校验：必须与 StartUpload 时一致
+    if (upload->data_path != expected_data_path) {
+      common::metrics().multipart_fail_total << 1;
+      return Result<ObjectMetadata>::Failure(common::MakeError(
+          ErrorCode::kBadRequest,
+          "upload was started on data_path '" + upload->data_path +
+              "', cannot complete via '" + std::string(expected_data_path) + "'"));
+    }
     if (upload->state != State::kActive) {
       common::metrics().multipart_fail_total << 1;
       return Result<ObjectMetadata>::Failure(common::MakeError(
@@ -164,7 +175,8 @@ Result<ObjectMetadata> MultipartCoordinator::CompleteUpload(
   return meta;
 }
 
-Result<bool> MultipartCoordinator::AbortUpload(std::string_view upload_id) {
+Result<bool> MultipartCoordinator::AbortUpload(std::string_view upload_id,
+                                                std::string_view expected_data_path) {
   auto upload = store_.Find(upload_id);
   if (upload == nullptr) {
     return Result<bool>::Success(false);
@@ -172,6 +184,14 @@ Result<bool> MultipartCoordinator::AbortUpload(std::string_view upload_id) {
   std::string backend_id;
   {
     std::scoped_lock lock(upload->mu);
+    // data_path 校验：必须与 StartUpload 时一致
+    if (upload->data_path != expected_data_path) {
+      common::metrics().multipart_fail_total << 1;
+      return Result<bool>::Failure(common::MakeError(
+          ErrorCode::kBadRequest,
+          "upload was started on data_path '" + upload->data_path +
+              "', cannot abort via '" + std::string(expected_data_path) + "'"));
+    }
     backend_id = upload->backend_upload_id;
     upload->state = State::kAborted;
   }

@@ -58,9 +58,11 @@ class MetadataClient {
     StartUpload(const StartUploadOptions& opts) const;
   [[nodiscard]] Result<CompleteUploadOutcome>
     CompleteUpload(const std::string& upload_id,
-                   const std::vector<PartCompletion>& parts) const;
+                   const std::vector<PartCompletion>& parts,
+                   DataPath data_path) const;
   [[nodiscard]] Result<bool>
-    AbortUpload(const std::string& upload_id) const;
+    AbortUpload(const std::string& upload_id,
+                DataPath data_path) const;
 
   /** 供 ApplyRequestTimeout 等访问 options。 */
   [[nodiscard]] const ClientOptions& options() const noexcept { return options_; }

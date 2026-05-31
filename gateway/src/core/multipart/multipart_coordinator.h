@@ -50,10 +50,12 @@ class MultipartCoordinator {
 
   [[nodiscard]] Result<ObjectMetadata>
     CompleteUpload(std::string_view upload_id,
-                   const std::vector<backend::PartRecord>& parts);
+                   const std::vector<backend::PartRecord>& parts,
+                   std::string_view expected_data_path);
 
   [[nodiscard]] Result<bool>
-    AbortUpload(std::string_view upload_id);
+    AbortUpload(std::string_view upload_id,
+                std::string_view expected_data_path);
 
   /**
    * @brief Best-effort backend cleanup for an upload that was already

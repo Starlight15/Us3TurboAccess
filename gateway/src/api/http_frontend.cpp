@@ -623,7 +623,7 @@ void HttpFrontend::HandleCompleteUpload(brpc::Controller* cntl,
     return;
   }
 
-  auto meta = multipart_.CompleteUpload(upload_id, parts);
+  auto meta = multipart_.CompleteUpload(upload_id, parts, "http-tcp");
   if (!meta.success()) {
     WriteError(cntl, gateway_id_, meta.error());
     return;
@@ -642,7 +642,7 @@ void HttpFrontend::HandleCompleteUpload(brpc::Controller* cntl,
 // DELETE /v1/uploads/{upload_id}
 void HttpFrontend::HandleAbortUpload(brpc::Controller* cntl,
                                       const std::string& upload_id) {
-  auto out = multipart_.AbortUpload(upload_id);
+  auto out = multipart_.AbortUpload(upload_id, "http-tcp");
   if (!out.success()) {
     WriteError(cntl, gateway_id_, out.error());
     return;

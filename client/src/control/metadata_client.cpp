@@ -138,7 +138,8 @@ Result<StartUploadOutcome> MetadataClient::StartUpload(
 
 Result<CompleteUploadOutcome> MetadataClient::CompleteUpload(
     const std::string& upload_id,
-    const std::vector<PartCompletion>& parts) const {
+    const std::vector<PartCompletion>& parts,
+    DataPath data_path) const {
   if (!initialized()) {
     return Result<CompleteUploadOutcome>::Failure(MakeNotInitialized("Metadata client"));
   }
@@ -152,6 +153,7 @@ Result<CompleteUploadOutcome> MetadataClient::CompleteUpload(
 
   us3_turbo_access::gateway::CompleteUploadRequest req;
   req.set_upload_id(upload_id);
+  req.set_data_path(std::string(ToString(data_path)));
   for (const auto& p : parts) {
     auto* pe = req.add_parts();
     pe->set_part_number(p.part_number);
@@ -160,7 +162,7 @@ Result<CompleteUploadOutcome> MetadataClient::CompleteUpload(
   us3_turbo_access::gateway::CompleteUploadResponse resp;
   stub_->CompleteUpload(&controller, &req, &resp, nullptr);
   auto status = CheckRpcFailure(controller, "CompleteUpload RPC failed",
-                                DataPath::kGdsCuObject, "");
+                                data_path, "");
   if (!status.success()) {
     return Result<CompleteUploadOutcome>::Failure(status.error());
   }
@@ -171,7 +173,8 @@ Result<CompleteUploadOutcome> MetadataClient::CompleteUpload(
   return Result<CompleteUploadOutcome>::Success(std::move(out));
 }
 
-Result<bool> MetadataClient::AbortUpload(const std::string& upload_id) const {
+Result<bool> MetadataClient::AbortUpload(const std::string& upload_id,
+                                          DataPath data_path) const {
   if (!initialized()) {
     return Result<bool>::Failure(MakeNotInitialized("Metadata client"));
   }
@@ -185,10 +188,11 @@ Result<bool> MetadataClient::AbortUpload(const std::string& upload_id) const {
 
   us3_turbo_access::gateway::AbortUploadRequest req;
   req.set_upload_id(upload_id);
+  req.set_data_path(std::string(ToString(data_path)));
   us3_turbo_access::gateway::AbortUploadResponse resp;
   stub_->AbortUpload(&controller, &req, &resp, nullptr);
   auto status = CheckRpcFailure(controller, "AbortUpload RPC failed",
-                                DataPath::kGdsCuObject, "");
+                                data_path, "");
   if (!status.success()) {
     return Result<bool>::Failure(status.error());
   }

@@ -104,6 +104,7 @@ message PartEtag {
 message CompleteUploadRequest {
   string upload_id = 1;
   repeated PartEtag parts = 2;
+  string data_path = 3;  // 调用方通道标识，用于校验与 StartUpload 一致
 }
 
 message CompleteUploadResponse {
@@ -114,6 +115,7 @@ message CompleteUploadResponse {
 
 message AbortUploadRequest {
   string upload_id = 1;
+  string data_path = 2;  // 调用方通道标识，用于校验与 StartUpload 一致
 }
 
 message AbortUploadResponse {

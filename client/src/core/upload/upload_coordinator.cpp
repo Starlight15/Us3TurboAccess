@@ -70,7 +70,7 @@ Result<UploadCoordinator::CompleteResult> UploadCoordinator::CompleteUpload(
   for (const auto& p : parts) {
     control_parts.push_back({p.part_number, p.etag});
   }
-  auto out = core_.metadata_client().CompleteUpload(upload_id, control_parts);
+  auto out = core_.metadata_client().CompleteUpload(upload_id, control_parts, data_path);
   if (!out.success()) {
     return Result<CompleteResult>::Failure(out.error());
   }
@@ -86,7 +86,7 @@ Result<bool> UploadCoordinator::AbortUpload(DataPath data_path,
   if (data_path == DataPath::kHttpTcp) {
     return core_.http_data_client().AbortUpload(upload_id);
   }
-  return core_.metadata_client().AbortUpload(upload_id);
+  return core_.metadata_client().AbortUpload(upload_id, data_path);
 }
 
 }  // namespace us3_turbo_access::client

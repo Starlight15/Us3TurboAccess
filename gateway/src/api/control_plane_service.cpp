@@ -335,7 +335,8 @@ void ControlPlaneService::CompleteUpload(
     pr.etag = p.etag();
     parts.push_back(std::move(pr));
   }
-  auto meta = multipart_.CompleteUpload(request->upload_id(), parts);
+  auto meta = multipart_.CompleteUpload(request->upload_id(), parts,
+                                        request->data_path());
   if (!meta.success()) {
     cntl->SetFailed(meta.error().message);
     return;
@@ -352,7 +353,8 @@ void ControlPlaneService::AbortUpload(
     google::protobuf::Closure* done) {
   brpc::ClosureGuard done_guard(done);
   auto* cntl = static_cast<brpc::Controller*>(cntl_base);
-  auto result = multipart_.AbortUpload(request->upload_id());
+  auto result = multipart_.AbortUpload(request->upload_id(),
+                                       request->data_path());
   if (!result.success()) {
     cntl->SetFailed(result.error().message);
     return;
