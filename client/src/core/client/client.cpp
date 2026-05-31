@@ -107,8 +107,10 @@ Result<TransferOutcome> MultipartUpload::UploadPart(std::uint32_t part_number,
   // B.4 后：数据面分发收敛到 UploadCoordinator::UploadPart，client.cpp
   // 不再自己 switch 三路；coordinator 内部组装 RequestOptions 并按 data_path
   // 调对应 TransferPath::PutObjectPart。
+  // C.4: 直接传 data_path（UploadPart 在 multipart 已知通路时启动）。
   ScopedTransferMetric metric(ScopedTransferMetric::Op::kUploadPart,
-                                static_cast<std::int64_t>(buffer.size));
+                                static_cast<std::int64_t>(buffer.size),
+                                impl_->data_path);
   auto outcome = impl_->core->upload_coordinator().UploadPart(
       impl_->data_path, impl_->object, checksum_policy, impl_->upload_id,
       part_number, object_offset, buffer);
@@ -319,6 +321,7 @@ Result<TransferOutcome> Client::GetObject(const RequestOptions& request,
   if (r.success()) {
     metric.MarkSuccess();
     metric.SetBytes(static_cast<std::int64_t>(r.value().bytes_transferred));
+    metric.SetDataPath(r.value().selected_path);  // C.4 per-path 拆分
   }
   return r;
 }
@@ -331,7 +334,10 @@ Result<TransferOutcome> Client::PutObject(const RequestOptions& request,
   ScopedTransferMetric metric(ScopedTransferMetric::Op::kPut,
                                 static_cast<std::int64_t>(buffer.size));
   auto r = core_->transfer_router().PutObject(request, buffer);
-  if (r.success()) metric.MarkSuccess();
+  if (r.success()) {
+    metric.MarkSuccess();
+    metric.SetDataPath(r.value().selected_path);  // C.4 per-path 拆分
+  }
   return r;
 }
 
