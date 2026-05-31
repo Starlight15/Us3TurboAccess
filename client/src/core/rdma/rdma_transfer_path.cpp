@@ -229,18 +229,12 @@ void DiscardAndAbort(ConnectionHandle& handle,
 
 // RDMA 路径要求页锁定 host 内存：ibv_reg_mr 会失败在普通 malloc 的内存上
 // （内核 pin 时拿不到稳定物理页）。这里前置拒绝，避免走到 5) reg_mr 才报错。
+//
+// B.5 后：底层共享 TransferPath::CommonPreflight 实现，错误消息风格三通路统一。
 [[nodiscard]] Result<bool> PreflightRdma(bool available, BufferType buffer_type) {
-  if (!available) {
-    return Result<bool>::Failure(MakeUnsupportedPath(
-        DataPath::kNativeRdma, "RDMA resources not initialized"));
-  }
-  if (buffer_type != BufferType::kHostPinned) {
-    return Result<bool>::Failure(MakeUnsupportedPath(
-        DataPath::kNativeRdma,
-        "RDMA path requires kHostPinned buffer; "
-        "use PinnedBuffer::Allocate or self-pinned mlock'd memory"));
-  }
-  return Result<bool>::Success(true);
+  return RdmaTransferPath::CommonPreflight(
+      DataPath::kNativeRdma, "RDMA (requires kHostPinned via PinnedBuffer::Allocate)",
+      available, buffer_type, BufferType::kHostPinned);
 }
 
 }  // namespace

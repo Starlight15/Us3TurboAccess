@@ -18,6 +18,13 @@ namespace {
                              "The current environment does not support the GDS channel");
 }
 
+// B.5 共享 Preflight：与 HTTP/RDMA 同款风格。GDS 要求 buffer.type=kCudaDevice。
+[[nodiscard]] Result<bool> PreflightGds(bool available, BufferType buffer_type) {
+  return GdsTransferPath::CommonPreflight(
+      DataPath::kGdsCuObject, "GDS (requires kCudaDevice GPU buffer)",
+      available, buffer_type, BufferType::kCudaDevice);
+}
+
 // 注册显存并向 gateway 协商出一个 TransferSession。
 // memory_registry 验证 buffer 类型 / 非空，但 descriptor 字段已从 wire 协议
 // 移除（gateway 用不到），所以这里只走校验。
@@ -60,9 +67,8 @@ bool GdsTransferPath::available() const { return caps_.cuobject_available; }
 // 与 HttpTransferPath::GetObject 路由逻辑完全对称。
 Result<TransferOutcome> GdsTransferPath::GetObject(const RequestOptions& request,
                                                    MutableBufferView buffer) const {
-  if (!available()) {
-    return Result<TransferOutcome>::Failure(MakeGdsUnsupportedError());
-  }
+  auto pre = PreflightGds(available(), buffer.type);
+  if (!pre.success()) return Result<TransferOutcome>::Failure(pre.error());
 
   // 并发条件：1) 已知 length；2) length >= threshold；3) chunks >= 2；4) executor 可用。
   // 任一不满足走单连接 GetObjectSingle。
@@ -163,9 +169,8 @@ Result<TransferOutcome> GdsTransferPath::GetObjectParallel(
 
 Result<TransferOutcome> GdsTransferPath::PutObject(const RequestOptions& request,
                                                    ConstBufferView buffer) const {
-  if (!available()) {
-    return Result<TransferOutcome>::Failure(MakeGdsUnsupportedError());
-  }
+  auto pre = PreflightGds(available(), buffer.type);
+  if (!pre.success()) return Result<TransferOutcome>::Failure(pre.error());
 
   // 入口拒：与 gateway 端 cuObjServer 1 GiB chunk 限制对齐，避免发到 server 才被拒。
   const auto max_put = context_.options.gds.put_single_max_bytes;
@@ -204,9 +209,8 @@ Result<TransferOutcome> GdsTransferPath::PutObject(const RequestOptions& request
 Result<TransferOutcome> GdsTransferPath::PutObjectPart(
     const RequestOptions& request, ConstBufferView buffer,
     const std::string& upload_id, std::uint32_t part_number) const {
-  if (!available()) {
-    return Result<TransferOutcome>::Failure(MakeGdsUnsupportedError());
-  }
+  auto pre = PreflightGds(available(), buffer.type);
+  if (!pre.success()) return Result<TransferOutcome>::Failure(pre.error());
 
   // 入口拒：part size 也受 1 GiB chunk 限制约束。
   const auto max_put = context_.options.gds.put_single_max_bytes;

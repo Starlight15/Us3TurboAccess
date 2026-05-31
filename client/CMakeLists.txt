@@ -10,6 +10,7 @@ add_library(us3_turbo_access_client
   src/core/common/brpc_channel.cpp
   src/core/common/channel_registry.cpp
   src/core/contracts/request_builder.cpp
+  src/core/routing/transfer_path.cpp
   src/core/routing/transfer_router.cpp
   src/core/metrics/client_metrics.cpp
   src/core/upload/upload_coordinator.cpp

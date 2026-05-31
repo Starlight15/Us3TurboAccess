@@ -25,15 +25,10 @@ constexpr DataPath kPath = DataPath::kHttpTcp;
  * data client 才报。
  */
 [[nodiscard]] Result<bool> Preflight(bool available, BufferType buffer_type) {
-  if (!available) {
-    return Result<bool>::Failure(MakeUnsupportedPath(
-        kPath, "HTTP path not initialized"));
-  }
-  if (buffer_type != BufferType::kHostRegular) {
-    return Result<bool>::Failure(MakeUnsupportedPath(
-        kPath, "HTTP path only accepts kHostRegular buffer"));
-  }
-  return Result<bool>::Success(true);
+  // 调用 TransferPath::CommonPreflight 让 HTTP/RDMA/GDS 三通路共享同款入口
+  // 校验风格 + 错误消息（B.5）。
+  return HttpTransferPath::CommonPreflight(
+      kPath, "HTTP", available, buffer_type, BufferType::kHostRegular);
 }
 
 }  // namespace
