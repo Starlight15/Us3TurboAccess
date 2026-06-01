@@ -1,7 +1,9 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include "client/src/core/common/brpc_channel.h"
@@ -78,6 +80,17 @@ class RdmaDataPlaneClient {
   ChannelRegistry&     registry_;
   const ClientOptions& options_;
   std::unique_ptr<us3_turbo_access::gateway::RdmaDataPlaneService_Stub> stub_;
+
+  // R.3：DiscoverEndpoint 结果缓存。server 返回的 (host, port, max_msg_bytes)
+  // 与 session_id 无关（gateway 启动时绑定固定），每笔 PUT 都发一次 RPC 浪费。
+  // 首次成功后缓存，后续直接返；线程安全用 mutex 保护。
+  // 失败不缓存。Shutdown() 清掉重新探。
+  mutable std::mutex            discover_mu_;
+  mutable bool                  discover_cached_{false};
+  mutable RdmaDiscoverInfo      cached_info_{};
+  // R.3 计数（atomic，读不持锁）
+  mutable std::atomic<std::int64_t> discover_hit_{0};
+  mutable std::atomic<std::int64_t> discover_miss_{0};
 };
 
 }  // namespace us3_turbo_access::client
