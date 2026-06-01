@@ -171,5 +171,7 @@ add_subdirectory(client)
 add_subdirectory(gateway)
 
 if(US3_TURBO_ACCESS_BUILD_EXAMPLES)
+  # examples/ 仅功能 / 回归用例 + 环境探测；bench/ 单独存性能压测代码
   add_subdirectory(examples)
+  add_subdirectory(bench)
 endif()

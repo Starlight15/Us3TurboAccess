@@ -12,7 +12,7 @@ RDMA_PORT="${RDMA_PORT:-18535}"
 GDS_RDMA_PORT="${GDS_RDMA_PORT:-18536}"
 PUBLIC_HOST="${PUBLIC_HOST:-192.168.1.198}"
 BIND_HOST="${BIND_HOST:-0.0.0.0}"
-GATEWAY_LOG="${GATEWAY_LOG:-/tmp/us3_turbo_access_gateway_${BRPC_PORT}.log}"
+GATEWAY_LOG="${GATEWAY_LOG:-${US3_REPO_ROOT:-../..}/examples/logs/gateway_${BRPC_PORT}.log}"
 
 # Defaults: 4 GiB total, 1 GiB parts
 TOTAL_BYTES="${TOTAL_BYTES:-$((4*1024*1024*1024))}"

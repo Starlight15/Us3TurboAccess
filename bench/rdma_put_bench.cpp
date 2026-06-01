@@ -86,6 +86,7 @@ int main(int argc, char** argv) {
   options.client_id = "us3-rdma-put-bench";
   options.data_path = DataPath::kNativeRdma;
   options.async_worker_threads = a.threads;
+  options.rdma.send_crc32c     = false;  // 专注 throughput，与 http_put_bench 对齐
   Client client(std::move(options));
   if (auto init = client.Initialize(); !init.success()) {
     std::cerr << "Initialize failed: " << init.error().message << std::endl;

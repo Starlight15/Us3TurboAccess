@@ -3,7 +3,7 @@
 set -e
 
 cd /mnt/n0test/xinghui.shao/gds/Us3TurboAccess/build
-LOG_DIR="../test_logs"
+LOG_DIR="../logs"
 mkdir -p "${LOG_DIR}"
 
 echo "=== P0 #2: PUT size limit test ==="

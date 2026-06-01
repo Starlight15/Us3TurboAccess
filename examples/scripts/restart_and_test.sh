@@ -7,14 +7,14 @@ set -u
 set -o pipefail
 
 GATEWAY_BIN="${GATEWAY_BIN:-/mnt/n0test/xinghui.shao/gds/Us3TurboAccess/build-local/gateway/us3_turbo_access_gateway}"
-EXAMPLE_BIN="${EXAMPLE_BIN:-/mnt/n0test/xinghui.shao/gds/Us3TurboAccess/build-local/examples/us3_turbo_access_gds_example}"
+EXAMPLE_BIN="${EXAMPLE_BIN:-${US3_REPO_ROOT:-../..}/build/examples/us3_turbo_access_gds_example}"
 
 BRPC_PORT="${BRPC_PORT:-${HTTP_PORT:-18082}}"
 RDMA_PORT="${RDMA_PORT:-18535}"
 GDS_RDMA_PORT="${GDS_RDMA_PORT:-18536}"
 PUBLIC_HOST="${PUBLIC_HOST:-192.168.1.198}"
 BIND_HOST="${BIND_HOST:-0.0.0.0}"
-GATEWAY_LOG="${GATEWAY_LOG:-/tmp/us3_turbo_access_gateway_${BRPC_PORT}.log}"
+GATEWAY_LOG="${GATEWAY_LOG:-${US3_REPO_ROOT:-../..}/examples/logs/gateway_${BRPC_PORT}.log}"
 
 EXAMPLE_BYTES="${EXAMPLE_BYTES:-1048576}"
 EXAMPLE_BUCKET="${EXAMPLE_BUCKET:-us3-test}"

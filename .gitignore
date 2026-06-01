@@ -26,6 +26,14 @@ compile_commands.json
 *.log
 /tmp/
 
+# bench / functional 运行产物
+# bench/logs/ 下的 CSV 可以人工 git add（作为 baseline）；新生成的 log/csv 不入库
+examples/logs/*
+!examples/logs/.gitkeep
+bench/logs/*.log
+bench/logs/*_gw.log
+bench/logs/*_tmp.csv
+
 # os
 .DS_Store
 Thumbs.db

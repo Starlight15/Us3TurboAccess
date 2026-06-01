@@ -7,11 +7,11 @@
 set -u
 set -o pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BUILD_DIR="${REPO_ROOT}/build"
 GATEWAY_BIN="${BUILD_DIR}/gateway/us3_turbo_access_gateway"
 ROUNDS=5
-OUT_CSV="${REPO_ROOT}/sustained_results.csv"
+OUT_CSV="${REPO_ROOT}/bench/logs/sustained_results.csv"
 
 BRPC_PORT=18082
 RDMA_PORT=18515
@@ -40,12 +40,12 @@ CELLS=(
 )
 
 declare -A BIN
-BIN[rdma:put]="${BUILD_DIR}/examples/us3_turbo_access_rdma_put_bench"
-BIN[gds:put]="${BUILD_DIR}/examples/us3_turbo_access_gds_put_bench_v2"
-BIN[http:put]="${BUILD_DIR}/examples/us3_turbo_access_http_put_bench"
-BIN[rdma:multipart]="${BUILD_DIR}/examples/us3_turbo_access_rdma_multipart_bench"
-BIN[gds:multipart]="${BUILD_DIR}/examples/us3_turbo_access_gds_multipart_bench"
-BIN[http:multipart]="${BUILD_DIR}/examples/us3_turbo_access_http_multipart_bench"
+BIN[rdma:put]="${BUILD_DIR}/bench/us3_turbo_access_rdma_put_bench"
+BIN[gds:put]="${BUILD_DIR}/bench/us3_turbo_access_gds_put_bench_v2"
+BIN[http:put]="${BUILD_DIR}/bench/us3_turbo_access_http_put_bench"
+BIN[rdma:multipart]="${BUILD_DIR}/bench/us3_turbo_access_rdma_multipart_bench"
+BIN[gds:multipart]="${BUILD_DIR}/bench/us3_turbo_access_gds_multipart_bench"
+BIN[http:multipart]="${BUILD_DIR}/bench/us3_turbo_access_http_multipart_bench"
 
 GATEWAY_PID=""
 log() { printf '[%(%H:%M:%S)T] %s\n' -1 "$*" >&2; }
@@ -83,10 +83,10 @@ start_gw() {
     flags+=( --gds_rdma_port="${GDS_RDMA_PORT}" )
   fi
   log "starting gateway rdma=${rdma} gds=${gds}"
-  "${GATEWAY_BIN}" "${flags[@]}" >/tmp/sustained_gw.log 2>&1 &
+  "${GATEWAY_BIN}" "${flags[@]}" >${REPO_ROOT}/bench/logs/sustained_gw.log 2>&1 &
   GATEWAY_PID=$!
   if ! wait_port "${BRPC_PORT}"; then
-    log "gateway not ready"; tail -n 30 /tmp/sustained_gw.log >&2; return 1
+    log "gateway not ready"; tail -n 30 ${REPO_ROOT}/bench/logs/sustained_gw.log >&2; return 1
   fi
   log "gateway pid=${GATEWAY_PID}"
 }

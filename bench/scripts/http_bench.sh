@@ -14,11 +14,11 @@
 set -u
 set -o pipefail
 
-US3_REPO_ROOT="${US3_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+US3_REPO_ROOT="${US3_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 US3_BUILD_DIR="${US3_BUILD_DIR:-${US3_REPO_ROOT}/build}"
 
 GATEWAY_BIN="${GATEWAY_BIN:-${US3_BUILD_DIR}/gateway/us3_turbo_access_gateway}"
-BENCH_BIN="${BENCH_BIN:-${US3_BUILD_DIR}/examples/us3_turbo_access_http_put_bench}"
+BENCH_BIN="${BENCH_BIN:-${US3_BUILD_DIR}/bench/us3_turbo_access_http_put_bench}"
 
 # 默认参数（可通过命令行覆盖）
 THREADS=4

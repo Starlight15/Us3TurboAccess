@@ -22,7 +22,7 @@
 set -u
 set -o pipefail
 
-US3_REPO_ROOT="${US3_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+US3_REPO_ROOT="${US3_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 US3_BUILD_DIR="${US3_BUILD_DIR:-${US3_REPO_ROOT}/build}"
 GATEWAY_BIN="${GATEWAY_BIN:-${US3_BUILD_DIR}/gateway/us3_turbo_access_gateway}"
 
@@ -36,7 +36,7 @@ MP_OBJECT_SIZE=$((32*1024*1024))
 MP_PART_SIZE=$((8*1024*1024))
 MP_COUNT=4
 MP_WARMUP=1
-OUT_CSV="${US3_REPO_ROOT}/bench_results.csv"
+OUT_CSV="${US3_REPO_ROOT}/bench/logs/bench_results.csv"
 CPUS=""
 PATHS="rdma,gds,http"
 MODES="put,multipart"
@@ -71,12 +71,12 @@ done
 
 # 二进制路径表
 declare -A BENCH_BIN
-BENCH_BIN[rdma:put]="${US3_BUILD_DIR}/examples/us3_turbo_access_rdma_put_bench"
-BENCH_BIN[rdma:multipart]="${US3_BUILD_DIR}/examples/us3_turbo_access_rdma_multipart_bench"
-BENCH_BIN[gds:put]="${US3_BUILD_DIR}/examples/us3_turbo_access_gds_put_bench_v2"
-BENCH_BIN[gds:multipart]="${US3_BUILD_DIR}/examples/us3_turbo_access_gds_multipart_bench"
-BENCH_BIN[http:put]="${US3_BUILD_DIR}/examples/us3_turbo_access_http_put_bench"
-BENCH_BIN[http:multipart]="${US3_BUILD_DIR}/examples/us3_turbo_access_http_multipart_bench"
+BENCH_BIN[rdma:put]="${US3_BUILD_DIR}/bench/us3_turbo_access_rdma_put_bench"
+BENCH_BIN[rdma:multipart]="${US3_BUILD_DIR}/bench/us3_turbo_access_rdma_multipart_bench"
+BENCH_BIN[gds:put]="${US3_BUILD_DIR}/bench/us3_turbo_access_gds_put_bench_v2"
+BENCH_BIN[gds:multipart]="${US3_BUILD_DIR}/bench/us3_turbo_access_gds_multipart_bench"
+BENCH_BIN[http:put]="${US3_BUILD_DIR}/bench/us3_turbo_access_http_put_bench"
+BENCH_BIN[http:multipart]="${US3_BUILD_DIR}/bench/us3_turbo_access_http_multipart_bench"
 
 GATEWAY_PID=""
 READY_TIMEOUT_SEC=20
@@ -132,7 +132,7 @@ start_gateway() {
     extra_flags+=( --gds_rdma_port="${GDS_RDMA_PORT}" )
   fi
 
-  local log_path="/tmp/us3_turbo_access_gateway_bench_${BRPC_PORT}.log"
+  local log_path="${US3_REPO_ROOT}/bench/logs/gateway_bench_${BRPC_PORT}.log"
   : > "${log_path}"
   log "starting gateway rdma=${rdma_enable} gds=${gds_enable} log=${log_path}"
   "${GATEWAY_BIN}" \

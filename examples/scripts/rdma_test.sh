@@ -5,7 +5,7 @@ set -u
 set -o pipefail
 
 # 默认从仓库根 build/ 取产物（do_make.sh 的输出位置）；可被环境变量覆盖。
-US3_REPO_ROOT="${US3_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+US3_REPO_ROOT="${US3_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 US3_BUILD_DIR="${US3_BUILD_DIR:-${US3_REPO_ROOT}/build}"
 
 GATEWAY_BIN="${GATEWAY_BIN:-${US3_BUILD_DIR}/gateway/us3_turbo_access_gateway}"
@@ -22,7 +22,7 @@ RDMA_PORT="${RDMA_PORT:-18515}"
 GDS_RDMA_PORT="${GDS_RDMA_PORT:-18516}"
 PUBLIC_HOST="${PUBLIC_HOST:-192.168.1.198}"
 BIND_HOST="${BIND_HOST:-0.0.0.0}"
-GATEWAY_LOG="${GATEWAY_LOG:-/tmp/us3_turbo_access_gateway_${BRPC_PORT}.log}"
+GATEWAY_LOG="${GATEWAY_LOG:-${US3_REPO_ROOT}/examples/logs/gateway_${BRPC_PORT}.log}"
 
 BYTES="${BYTES:-4194304}"
 BUCKET="${BUCKET:-us3-test}"
