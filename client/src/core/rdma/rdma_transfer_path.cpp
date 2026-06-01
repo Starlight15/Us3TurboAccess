@@ -390,4 +390,10 @@ RdmaTransferPath::PrepareAndWriteImpl(const RequestOptions& request,
                           *pool_, *driver_, request, buffer, is_multipart_part);
 }
 
+// R.5：透传 pool 统计；pool_ 未 init 时返回零值。
+RdmaConnectionPool::PoolStats RdmaTransferPath::pool_stats() const {
+  if (pool_ == nullptr) return RdmaConnectionPool::PoolStats{};
+  return pool_->stats();
+}
+
 }  // namespace us3_turbo_access::client

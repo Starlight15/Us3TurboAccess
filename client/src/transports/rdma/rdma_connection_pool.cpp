@@ -86,6 +86,7 @@ Result<ConnectionHandle> RdmaConnectionPool::Acquire(const std::string& host,
     if (it != idle_.end() && !it->second.empty()) {
       auto entry = std::move(it->second.front());
       it->second.pop_front();
+      acquire_hit_.fetch_add(1, std::memory_order_relaxed);
       return Result<ConnectionHandle>::Success(
           ConnectionHandle(this, std::move(entry)));
     }
@@ -93,6 +94,7 @@ Result<ConnectionHandle> RdmaConnectionPool::Acquire(const std::string& host,
 
   // 慢路径：锁外 CM 握手；Attach 必须在 Connect 拿到 cq 之后。
   // 注：这里不预先 reserve idle_[key]，新连接首次归还时再分配 deque。
+  acquire_miss_.fetch_add(1, std::memory_order_relaxed);
   auto conn = std::make_unique<RdmaCmConnection>(opts_);
   auto connected = conn->Connect(host, port);
   if (!connected.success()) {
@@ -119,12 +121,14 @@ void RdmaConnectionPool::ReturnOrDiscard(
       auto& q = idle_[entry->endpoint];
       if (q.size() < opts_.pool_max_idle_per_endpoint) {
         q.push_back(std::move(entry));
+        return_kept_.fetch_add(1, std::memory_order_relaxed);
         return;
       }
     }
   }
   // 锁外销毁：DiscardOne 会调 driver_.Detach（同步等 driver epoch+2），
   // 持池锁会跟 driver Loop 抢锁，可能让其它 Acquire 短暂卡顿。
+  return_dropped_.fetch_add(1, std::memory_order_relaxed);
   DiscardOne(std::move(entry));
 }
 
@@ -135,6 +139,22 @@ void RdmaConnectionPool::DiscardOne(
   // 触发 RdmaCmConnection::Disconnect 销毁 QP/CQ/PD。
   driver_.Detach(entry->driver_conn_id);
   entry->conn.reset();
+}
+
+RdmaConnectionPool::PoolStats RdmaConnectionPool::stats() const noexcept {
+  PoolStats s{};
+  s.acquire_hit    = acquire_hit_.load(std::memory_order_relaxed);
+  s.acquire_miss   = acquire_miss_.load(std::memory_order_relaxed);
+  s.return_kept    = return_kept_.load(std::memory_order_relaxed);
+  s.return_dropped = return_dropped_.load(std::memory_order_relaxed);
+  // idle_size 需要锁；这里短锁就拿 size，再立刻释放
+  std::size_t idle_total = 0;
+  {
+    std::scoped_lock lock(const_cast<std::mutex&>(mu_));
+    for (const auto& kv : idle_) idle_total += kv.second.size();
+  }
+  s.idle_size = idle_total;
+  return s;
 }
 
 }  // namespace us3_turbo_access::client

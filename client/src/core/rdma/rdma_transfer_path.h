@@ -6,12 +6,12 @@
 #include "client/src/control/metadata_client.h"
 #include "client/src/core/routing/transfer_path.h"
 #include "client/src/data/rdma_data_plane_client.h"
+#include "client/src/transports/rdma/rdma_connection_pool.h"  // R.5: PoolStats
 #include "us3_turbo_access/client/options.h"
 
 namespace us3_turbo_access::client {
 
 class RdmaCompletionDriver;
-class RdmaConnectionPool;
 
 /**
  * Native RDMA 传输路径（CPU host buffer ↔ gateway pinned buffer）。
@@ -45,6 +45,12 @@ class RdmaTransferPath final : public TransferPath {
   [[nodiscard]] Result<TransferOutcome>
     PutObjectPart(const RequestOptions& request, ConstBufferView buffer,
                   const std::string& upload_id, std::uint32_t part_number) const;
+
+  /**
+   * R.5：暴露内部 RdmaConnectionPool 的统计快照，用于 bench / 诊断。
+   * 池为空时 idle_size=0 + acquire_hit=0；nullptr 返回时表示路径未初始化。
+   */
+  [[nodiscard]] RdmaConnectionPool::PoolStats pool_stats() const;
 
   // C.6: 把原匿名 ns 中 PrepareAndWrite 自由函数（8 参数引用传递）改为类方法。
   // 未来 RDMA GET 实现可以复用前 4 步（OpenSession / DiscoverEndpoint / Pool.Acquire

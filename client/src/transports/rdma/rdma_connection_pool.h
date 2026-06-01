@@ -101,6 +101,24 @@ class RdmaConnectionPool {
   /** 关闭所有缓存连接。Pool 析构时也会调。*/
   void Shutdown();
 
+  /**
+   * R.5 复用诊断计数（atomic，无锁读）。每个 RDMA 客户端进程一个 pool 实例；
+   * 多 client 时按实例独立。bench 跑完读 stats() 看命中率。
+   *   acquire_hit  : Acquire 在 idle_ 找到现成连接，省去 CM 三次握手
+   *   acquire_miss : Acquire 池空，现场建新连接（含 CM）
+   *   return_kept  : ReturnOrDiscard 归回池子复用
+   *   return_dropped: 超 pool_max_idle 丢弃 / Discard() 显式丢弃
+   * 期望：稳态下 acquire_hit / total ≈ 1，return_dropped ≈ 0。
+   */
+  struct PoolStats {
+    std::int64_t acquire_hit;
+    std::int64_t acquire_miss;
+    std::int64_t return_kept;
+    std::int64_t return_dropped;
+    std::size_t  idle_size;  // 所有 endpoint 的 idle 总数
+  };
+  [[nodiscard]] PoolStats stats() const noexcept;
+
   // ConnectionHandle 析构时通过 friend 调用，归还连接到池子或者丢弃。
   friend class ConnectionHandle;
 
@@ -115,6 +133,12 @@ class RdmaConnectionPool {
   std::unordered_map<std::string,
                      std::deque<std::unique_ptr<PooledConnection>>> idle_;
   bool                                                             shutdown_{false};
+
+  // R.5 计数（atomic，不持锁）
+  std::atomic<std::int64_t>                                        acquire_hit_{0};
+  std::atomic<std::int64_t>                                        acquire_miss_{0};
+  std::atomic<std::int64_t>                                        return_kept_{0};
+  std::atomic<std::int64_t>                                        return_dropped_{0};
 };
 
 }  // namespace us3_turbo_access::client
