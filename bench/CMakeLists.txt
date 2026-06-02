@@ -41,3 +41,15 @@ target_include_directories(us3_turbo_access_rdma_multipart_bench PRIVATE ${PROJE
 target_include_directories(us3_turbo_access_gds_put_bench        PRIVATE ${CUFILE_INCLUDE_DIR})
 target_include_directories(us3_turbo_access_gds_put_bench_v2     PRIVATE ${PROJECT_SOURCE_DIR} ${CUFILE_INCLUDE_DIR})
 target_include_directories(us3_turbo_access_gds_multipart_bench  PRIVATE ${PROJECT_SOURCE_DIR} ${CUFILE_INCLUDE_DIR})
+
+# ---- UCX PoC ----
+# 系统装的 UCX 1.18：/usr/lib/cmake/ucx/ucx-config.cmake 提供 ucx::ucp/ucs/uct
+# PoC 不依赖 client lib，独立于现有 RDMA verbs 实现，用于性能基线验证
+find_package(ucx CONFIG)
+if(ucx_FOUND)
+  add_executable(us3_turbo_access_ucx_put_poc ucx_put_poc.cpp)
+  target_link_libraries(us3_turbo_access_ucx_put_poc PRIVATE ucx::ucp ucx::ucs)
+  message(STATUS "UCX found: enabling ucx_put_poc")
+else()
+  message(STATUS "UCX not found: skipping ucx_put_poc")
+endif()
