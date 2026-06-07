@@ -187,7 +187,12 @@ Result<TransferOutcome> GdsTransferPath::PutObject(const RequestOptions& request
   // 失败时 best-effort abort server 端 session，避免重试导致 server 端
   // session 积压（GDS 通路没有像 RDMA 那样的专用 AbortSession 数据面，
   // 通过 ControlPlaneService::AbortSession RPC 触发 MarkFailed）。
+  const auto deadline = std::chrono::steady_clock::now() + context_.options.request_timeout;
   return RetryIfRetryable(DefaultRetryPolicy(), [&]() -> Result<TransferOutcome> {
+    if (std::chrono::steady_clock::now() >= deadline)
+      return Result<TransferOutcome>::Failure(MakeError(
+          ErrorCode::kTimeout, "PutObject retry deadline exceeded", true));
+
     auto session = OpenSession(context_, OperationType::kPut, request, buffer);
     if (!session.success()) {
       return Result<TransferOutcome>::Failure(session.error());
@@ -224,29 +229,20 @@ Result<TransferOutcome> GdsTransferPath::PutObjectPart(
 
   // 单 part 幂等（同 part_number 覆盖），可重试。
   // 失败时 best-effort abort 旧 session（与 PutObject 同款治理）。
+  const auto deadline = std::chrono::steady_clock::now() + context_.options.request_timeout;
   return RetryIfRetryable(DefaultRetryPolicy(), [&]() -> Result<TransferOutcome> {
-    // expected_size = 0：OpenSession 中 length 不带，gateway 不做整对象 Reserve。
-    auto registration =
-        context_.memory_registry.Register(OperationType::kPut, buffer);
-    if (!registration.success()) {
-      return Result<TransferOutcome>::Failure(registration.error());
-    }
+    if (std::chrono::steady_clock::now() >= deadline)
+      return Result<TransferOutcome>::Failure(MakeError(
+          ErrorCode::kTimeout, "PutObjectPart retry deadline exceeded", true));
 
-    auto open_request = MakeSessionHandshake(context_.options, SessionPlan{
-        .operation = OperationType::kPut,
-        .request = request,
-        .buffer_type = buffer.type,
-        .path = DataPath::kGdsCuObject,
-    });
-    auto open_response = context_.metadata_client.OpenTransferSession(open_request);
-    if (!open_response.success()) {
-      return Result<TransferOutcome>::Failure(open_response.error());
+    auto session = OpenSession(context_, OperationType::kPut, request, buffer);
+    if (!session.success()) {
+      return Result<TransferOutcome>::Failure(session.error());
     }
-    auto session = ImportSession(open_response.value());
-    const std::string session_id = session.meta.session_id;
+    const std::string session_id = session.value().meta.session_id;
 
     auto outcome = context_.cuobj_client.ExecutePutPart(
-        context_.options, context_.data_client, session, request, buffer,
+        context_.options, context_.data_client, session.value(), request, buffer,
         upload_id, part_number);
     if (!outcome.success()) {
       (void)context_.metadata_client.AbortSession(session_id);

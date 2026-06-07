@@ -1,10 +1,9 @@
 #pragma once
 
-#include <atomic>
 #include <cstdint>
 #include <memory>
-#include <mutex>
 #include <string>
+#include <vector>
 
 #include "client/src/core/common/brpc_channel.h"
 #include "rdma_data_plane.pb.h"
@@ -14,9 +13,11 @@
 namespace us3_turbo_access::client {
 
 struct RdmaDiscoverInfo {
-  std::string   host;
-  std::uint32_t port{0};
-  std::uint64_t max_msg_bytes{0};
+  std::string              host;
+  std::uint32_t            ucx_port{0};
+  std::uint64_t            max_msg_bytes{0};
+  std::uint64_t            gw_raddr{0};       // gateway buffer 虚地址
+  std::vector<std::uint8_t> gw_packed_rkey;   // ucp_rkey_pack 结果
 };
 
 struct RdmaBindInfo {
@@ -37,29 +38,26 @@ class ChannelRegistry;
 
 /**
  * 客户端调 RdmaDataPlaneService 的薄 stub。
- * 与 MetadataClient / GdsDataClient 平行；本期共用 ChannelRegistry 的 baidu_std Channel。
+ *
+ * RMA 模式：PrepareTransfer 携带 client_raddr/packed_rkey/transfer_bytes；
+ * gateway 返回 ucx_port，client 据此建 ep 并发 AM_REGISTER。
+ * PrepareTransfer 结果不缓存——raddr/rkey 是 per-session 的。
  */
 class RdmaDataPlaneClient {
  public:
-  /** 接受共享 baidu_std Channel；ChannelRegistry 提供。 */
   RdmaDataPlaneClient(ChannelRegistry& registry, const ClientOptions& options);
 
   [[nodiscard]] Result<bool> Initialize();
   void Shutdown();
   [[nodiscard]] bool initialized() const;
 
-  [[nodiscard]] Result<RdmaDiscoverInfo>
-    DiscoverEndpoint(const std::string& session_id) const;
-
-  [[nodiscard]] Result<RdmaBindInfo>
-    BindSessionToConnection(const std::string& session_id,
-                            std::uint64_t conn_token) const;
-
   /**
-   * 提交整对象 RDMA WRITE。client_crc32c 非空时携带 client 端算出的 CRC32C
-   * （已 base64 编码），server 端在 commit 时与 pinned buffer 的 CRC 比对，
-   * 不一致会拒绝 commit 并返回 kInvalidArgument。
+   * 通知 gateway 分配 gw_buf 并注册 RMA；返回 gw_raddr/gw_packed_rkey 供 client PUT。
    */
+  [[nodiscard]] Result<RdmaDiscoverInfo>
+    PrepareTransfer(const std::string& session_id,
+                    std::uint64_t transfer_bytes) const;
+
   [[nodiscard]] Result<RdmaCommitInfo>
     CommitObject(const std::string& session_id,
                  std::uint64_t bytes_transferred,
@@ -70,7 +68,6 @@ class RdmaDataPlaneClient {
                std::uint32_t part_number, std::uint64_t bytes_transferred,
                const std::string& client_crc32c_b64 = {}) const;
 
-  /** PUT 失败路径调用：让 gateway 立即释放该 session 的 buffer/MR。Best-effort。*/
   [[nodiscard]] Result<bool>
     AbortSession(const std::string& session_id) const;
 
@@ -80,17 +77,6 @@ class RdmaDataPlaneClient {
   ChannelRegistry&     registry_;
   const ClientOptions& options_;
   std::unique_ptr<us3_turbo_access::gateway::RdmaDataPlaneService_Stub> stub_;
-
-  // R.3：DiscoverEndpoint 结果缓存。server 返回的 (host, port, max_msg_bytes)
-  // 与 session_id 无关（gateway 启动时绑定固定），每笔 PUT 都发一次 RPC 浪费。
-  // 首次成功后缓存，后续直接返；线程安全用 mutex 保护。
-  // 失败不缓存。Shutdown() 清掉重新探。
-  mutable std::mutex            discover_mu_;
-  mutable bool                  discover_cached_{false};
-  mutable RdmaDiscoverInfo      cached_info_{};
-  // R.3 计数（atomic，读不持锁）
-  mutable std::atomic<std::int64_t> discover_hit_{0};
-  mutable std::atomic<std::int64_t> discover_miss_{0};
 };
 
 }  // namespace us3_turbo_access::client

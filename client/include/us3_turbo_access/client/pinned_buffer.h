@@ -22,7 +22,10 @@ namespace us3_turbo_access::client {
  *
  * Ownership is move-only; the destructor returns the buffer to cudart.
  */
-class PinnedBuffer {
+class [[deprecated(
+    "PinnedBuffer uses cudaHostAlloc and was designed for the verbs RDMA path "
+    "(now removed). For UCX path use aligned_alloc+mlock with BufferType::kHostRegular.")]]
+PinnedBuffer {
  public:
   /**
    * @brief Allocates a pinned host buffer of @p size bytes.

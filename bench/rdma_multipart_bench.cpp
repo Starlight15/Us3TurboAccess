@@ -17,7 +17,7 @@
 
 #include "examples/common/bench_runner.h"
 #include "us3_turbo_access/client/client.h"
-#include "us3_turbo_access/client/pinned_buffer.h"
+#include <sys/mman.h>
 
 namespace {
 using namespace us3_turbo_access::client;
@@ -93,23 +93,20 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  // 为每个 part 单独分配 PinnedBuffer（RDMA 通路每次 reg 本地 MR）。
+  // UCX TAG 路径：普通对齐内存
   const std::size_t num_parts = (a.object_size + a.part_size - 1) / a.part_size;
-  std::vector<PinnedBuffer> part_buffers;
+  std::vector<void*>        part_buffers;
   std::vector<std::size_t>  part_sizes(num_parts);
   part_buffers.reserve(num_parts);
   for (std::size_t i = 0; i < num_parts; ++i) {
     const std::size_t off = i * a.part_size;
     const std::size_t sz  = std::min(a.part_size, a.object_size - off);
     part_sizes[i] = sz;
-    auto pb = PinnedBuffer::Allocate(sz);
-    if (!pb.success()) {
-      std::cerr << "PinnedBuffer alloc part[" << i << "] failed: "
-                << pb.error().message << std::endl;
-      return 1;
-    }
-    FillRandom(static_cast<std::byte*>(pb.value().data()), sz, a.seed + i + 1);
-    part_buffers.push_back(std::move(pb.value()));
+    void* p = std::aligned_alloc(4096, sz);
+    if (!p) { std::cerr << "aligned_alloc part[" << i << "] failed" << std::endl; return 1; }
+    ::mlock(p, sz);
+    FillRandom(static_cast<std::byte*>(p), sz, a.seed + i + 1);
+    part_buffers.push_back(p);
   }
 
   const std::size_t concurrency = a.threads > 0 ? a.threads : 4;
@@ -127,9 +124,9 @@ int main(int argc, char** argv) {
       specs.push_back(MultipartUpload::PartSpec{
           .part_number   = static_cast<std::uint32_t>(i + 1),
           .object_offset = i * a.part_size,
-          .buffer = ConstBufferView{.data = part_buffers[i].data(),
+          .buffer = ConstBufferView{.data = part_buffers[i],
                                     .size = part_sizes[i],
-                                    .type = BufferType::kHostPinned},
+                                    .type = BufferType::kHostRegular},
       });
     }
     auto up = upload.UploadParts(specs, std::min(concurrency, num_parts));

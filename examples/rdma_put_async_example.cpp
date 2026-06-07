@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "us3_turbo_access/client/client.h"
-#include "us3_turbo_access/client/pinned_buffer.h"
+#include <sys/mman.h>
 
 namespace {
 
@@ -55,21 +55,20 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  // 每个并发持有自己的 pinned buffer + key，避免共享。
-  std::vector<PinnedBuffer> buffers;
-  std::vector<std::string>  keys;
-  buffers.reserve(concurrency);
+  // UCX TAG 路径：普通对齐内存
+  std::vector<void*>       raw_bufs;
+  std::vector<std::string> keys;
+  raw_bufs.reserve(concurrency);
   keys.reserve(concurrency);
   for (std::size_t i = 0; i < concurrency; ++i) {
-    auto buf = PinnedBuffer::Allocate(bytes);
-    if (!buf.success()) {
-      std::cerr << "PinnedBuffer::Allocate[" << i << "] failed: "
-                << buf.error().message << std::endl;
+    void* p = std::aligned_alloc(4096, bytes);
+    if (!p) {
+      std::cerr << "aligned_alloc[" << i << "] failed" << std::endl;
       return 1;
     }
-    FillPattern(static_cast<std::byte*>(buf.value().data()), bytes,
-                static_cast<std::uint8_t>(i + 1));
-    buffers.push_back(std::move(buf.value()));
+    ::mlock(p, bytes);
+    FillPattern(static_cast<std::byte*>(p), bytes, static_cast<std::uint8_t>(i + 1));
+    raw_bufs.push_back(p);
     keys.push_back(key_prefix + "/obj-" + std::to_string(i));
   }
 
@@ -86,7 +85,9 @@ int main(int argc, char** argv) {
       RequestOptions req;
       req.object = ObjectId{.bucket = bucket, .key = key};
       req.length = bytes;
-      futs.push_back(client.PutObjectAsync(req, buffers[i].view()));
+      futs.push_back(client.PutObjectAsync(req,
+          ConstBufferView{.data = raw_bufs[i], .size = bytes,
+                          .type = BufferType::kHostRegular}));
     }
     std::size_t ok = 0;
     for (std::size_t i = 0; i < concurrency; ++i) {

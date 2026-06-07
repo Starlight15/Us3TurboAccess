@@ -34,6 +34,7 @@ find_package(spdlog REQUIRED
   PATHS "${FUSION_ACCESS_DEPS_ROOT}/spdlog-install"
   NO_DEFAULT_PATH)
 find_package(nlohmann_json REQUIRED)
+find_package(ucx CONFIG)
 find_package(Protobuf CONFIG REQUIRED
   PATHS
     ${US3_TURBO_ACCESS_PROTOBUF_ROOT}

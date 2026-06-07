@@ -49,41 +49,22 @@ struct GdsOptions {
 };
 
 /**
- * @brief Native RDMA transport tunables.
- *
- * Hardware-specific knobs that are wholly independent of the GDS path.
- */
-struct RdmaOptions {
-  /** Listening port for the native RDMA data plane. */
-  int                       listen_port{18515};
-  /** RDMA HCA name; empty selects the first active device. */
-  std::string               device_name;
-  /** InfiniBand port number on the selected HCA. */
-  std::uint8_t              ib_port{1};
-  /** GID index used for RoCE; ignored on IB. */
-  int                       gid_index{0};
 
+/** UCX 数据通路参数（与 verbs RDMA 完全独立）。 */
+struct UcxOptions {
+  /** UCX listener port（供 client ucp_ep_create 连接）。 */
+  int         listen_port{18520};
   /**
-   * Maximum bytes per single RDMA message. The default of 4 GiB matches
-   * the NIC WQE addressable limit; tune downward if the HCA reports a
-   * smaller per-WQE capacity.
+   * 最大单笔传输字节数；用于 PrepareTransfer 告知 client 上限，
+   * 超出时 PrepareTransfer 提前拒绝，避免分配超大 buffer。
    */
-  std::size_t               max_msg_bytes{4ULL * 1024ULL * 1024ULL * 1024ULL};
-
-  /** QPs created per session. Currently only 1 is supported. */
-  int                       qp_per_session{1};
-
-  /** Number of threads dispatching librdmacm CM events. */
-  int                       cm_event_threads{1};
-
-  /**
-   * RDMA session TTL. After BindSession, a session that is neither
-   * committed nor aborted within this window is reclaimed by
-   * RdmaSessionSweeper. Set to 0 to disable the sweeper.
-   */
-  std::chrono::seconds      session_ttl{std::chrono::seconds(60)};
-  /** Period between RdmaSessionSweeper scans. */
-  std::chrono::seconds      session_sweep_interval{std::chrono::seconds(10)};
+  std::size_t max_msg_bytes{4ULL * 1024ULL * 1024ULL * 1024ULL};
+  /** CommitObject 等待 ep_ready + GET 完成的总 deadline；超时返回 kTimeout（retryable）。 */
+  std::chrono::milliseconds commit_data_timeout{std::chrono::milliseconds(5000)};
+  /** buffer pool 最大空闲数；0 = 不复用（每次 malloc+mlock）。 */
+  std::size_t buffer_pool_max_idle{16};
+  /** Session 超时时间（PrepareTransfer 分配 buffer 到 CommitObject）。 */
+  std::chrono::seconds session_ttl{std::chrono::seconds(120)};
 };
 
 /**
@@ -120,10 +101,10 @@ struct GatewayOptions {
   bool        gds_enable{true};
   /** GDS-specific tunables. */
   GdsOptions  gds;
-  /** Whether to enable the native RDMA data plane. */
-  bool        rdma_enable{false};
-  /** RDMA-specific tunables. */
-  RdmaOptions rdma;
+  /** Whether to enable the UCX data plane. */
+  bool        ucx_enable{false};
+  /** UCX-specific tunables. */
+  UcxOptions  ucx;
 
   /** Default lifetime of an open transfer session. */
   std::chrono::seconds session_ttl{std::chrono::minutes(10)};

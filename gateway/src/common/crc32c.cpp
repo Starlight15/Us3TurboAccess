@@ -1,6 +1,7 @@
 #include "common/crc32c.h"
 
 #include <array>
+#include <vector>
 
 namespace us3_turbo_access::gateway::common {
 
@@ -48,6 +49,27 @@ std::uint32_t Crc32c(std::span<const std::byte> data) noexcept {
 std::uint32_t Crc32c(std::string_view data) noexcept {
   return Crc32cFinalize(
       Crc32cUpdate(Crc32cInit(), data.data(), data.size()));
+}
+
+std::optional<std::uint32_t> ParseBase64Crc32c(std::string_view s) noexcept {
+  if (s.empty()) return std::nullopt;
+  auto idx = [](char c) -> int {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62; if (c == '/') return 63; return -1;
+  };
+  std::vector<std::uint8_t> out;
+  std::uint32_t buf = 0; int bits = 0;
+  for (char c : s) {
+    if (c == '=') break;
+    int v = idx(c); if (v < 0) return std::nullopt;
+    buf = (buf << 6) | static_cast<std::uint32_t>(v); bits += 6;
+    if (bits >= 8) { bits -= 8; out.push_back(static_cast<std::uint8_t>((buf >> bits) & 0xFFu)); }
+  }
+  if (out.size() < 4) return std::nullopt;
+  return (std::uint32_t(out[0]) << 24) | (std::uint32_t(out[1]) << 16) |
+         (std::uint32_t(out[2]) << 8)  |  std::uint32_t(out[3]);
 }
 
 }  // namespace us3_turbo_access::gateway::common

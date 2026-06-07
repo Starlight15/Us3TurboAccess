@@ -76,6 +76,12 @@ class MultipartCoordinator {
                     std::uint64_t offset, std::uint64_t size,
                     std::string etag);
 
+  /**
+   * Generate standardized part etag: "{part_number}-{size}".
+   * All data paths must use this to ensure etag format consistency.
+   */
+  static std::string GeneratePartEtag(std::uint32_t part_number, std::uint64_t size);
+
   [[nodiscard]] std::size_t max_part_size() const noexcept {
     return max_part_size_;
   }

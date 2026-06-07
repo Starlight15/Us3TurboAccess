@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <optional>
 #include <span>
 #include <string_view>
 
@@ -29,5 +30,12 @@ namespace us3_turbo_access::gateway::common {
 [[nodiscard]] std::uint32_t Crc32cUpdate(std::uint32_t state,
                                           const void* data, std::size_t n) noexcept;
 [[nodiscard]] std::uint32_t Crc32cFinalize(std::uint32_t state) noexcept;
+
+/**
+ * 将 base64 编码的 big-endian uint32 CRC32C 字符串解码为整数。
+ * 与 S3 x-amz-checksum-crc32c header 格式兼容。
+ * 解析失败返回 nullopt。
+ */
+[[nodiscard]] std::optional<std::uint32_t> ParseBase64Crc32c(std::string_view s) noexcept;
 
 }  // namespace us3_turbo_access::gateway::common

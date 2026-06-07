@@ -13,7 +13,7 @@
 #include <vector>
 
 #include "us3_turbo_access/client/client.h"
-#include "us3_turbo_access/client/pinned_buffer.h"
+#include <sys/mman.h>
 
 int main(int argc, char** argv) {
   using namespace us3_turbo_access::client;
@@ -60,25 +60,20 @@ int main(int argc, char** argv) {
             << " num_parts=" << num_parts
             << " concurrency=" << concurrency << std::endl;
 
-  // 每个 part 独立 pinned buffer，内容是 (offset+j)%251 模式，跟 multipart_example 一致。
-  std::vector<PinnedBuffer> buffers;
+  // 每个 part 独立对齐内存（UCX TAG 路径，无需 cudaHostAlloc）
+  std::vector<void*>        raw_bufs;
   std::vector<std::size_t>  part_sizes(num_parts);
-  buffers.reserve(num_parts);
+  raw_bufs.reserve(num_parts);
   for (std::size_t i = 0; i < num_parts; ++i) {
     const std::size_t off = i * part_size;
     const std::size_t sz  = std::min(part_size, total_bytes - off);
     part_sizes[i] = sz;
-    auto buf = PinnedBuffer::Allocate(sz);
-    if (!buf.success()) {
-      std::cerr << "PinnedBuffer::Allocate[" << i << "] failed: "
-                << buf.error().message << std::endl;
-      return 1;
-    }
-    auto* p = static_cast<std::byte*>(buf.value().data());
-    for (std::size_t j = 0; j < sz; ++j) {
-      p[j] = static_cast<std::byte>((off + j) % 251U);
-    }
-    buffers.push_back(std::move(buf.value()));
+    void* p = std::aligned_alloc(4096, sz);
+    if (!p) { std::cerr << "aligned_alloc[" << i << "] failed" << std::endl; return 1; }
+    ::mlock(p, sz);
+    auto* bp = static_cast<std::byte*>(p);
+    for (std::size_t j = 0; j < sz; ++j) bp[j] = static_cast<std::byte>((off + j) % 251U);
+    raw_bufs.push_back(p);
   }
 
   std::vector<MultipartUpload::PartSpec> specs;
@@ -87,7 +82,9 @@ int main(int argc, char** argv) {
     specs.push_back(MultipartUpload::PartSpec{
         .part_number   = static_cast<std::uint32_t>(i + 1),
         .object_offset = i * part_size,
-        .buffer        = buffers[i].view(),
+        .buffer        = ConstBufferView{.data = raw_bufs[i],
+                                         .size = part_sizes[i],
+                                         .type = BufferType::kHostRegular},
     });
   }
 

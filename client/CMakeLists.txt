@@ -9,6 +9,7 @@ add_library(us3_turbo_access_client
   src/core/common/errors.cpp
   src/core/common/brpc_channel.cpp
   src/core/common/channel_registry.cpp
+  src/core/common/crc32c_helper.cpp
   src/core/contracts/request_builder.cpp
   src/core/routing/transfer_path.cpp
   src/core/routing/transfer_router.cpp
@@ -26,14 +27,12 @@ add_library(us3_turbo_access_client
   src/transports/gds/cuobj_library.cpp
   src/transports/gds/chunk_dispatcher.cpp
   src/transports/gds/cuobject_client.cpp
-  src/transports/rdma/host_memory_registry.cpp
-  src/transports/rdma/pinned_buffer.cpp
-  src/transports/rdma/rdma_cm_connection.cpp
-  src/transports/rdma/rdma_completion_driver.cpp
-  src/transports/rdma/rdma_connection_pool.cpp
-  src/transports/rdma/rdma_resources.cpp
-  src/transports/rdma/rdma_transfer_engine.cpp
+  src/transports/ucx/ucx_context.cpp
+  src/transports/ucx/ucx_worker.cpp
+  src/transports/ucx/ucx_endpoint.cpp
+  src/transports/ucx/ucx_endpoint_pool.cpp
   src/transports/http/http_channel.cpp)
+
 add_dependencies(us3_turbo_access_client
   us3_turbo_access_control_plane_proto
   us3_turbo_access_rdma_data_plane_proto)
@@ -58,8 +57,8 @@ target_link_libraries(us3_turbo_access_client
     us3_turbo_access_spdlog
     nlohmann_json::nlohmann_json
     us3_turbo_access_brpc
-    ${IBVERBS_LIBRARY}
-    ${RDMACM_LIBRARY}
+    ucx::ucp
+    ucx::ucs
     ${CUOBJSERVER_LIBRARY}
     ${CUDART_LIBRARY})
 

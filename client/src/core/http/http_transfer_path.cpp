@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "client/src/core/async/client_executor.h"
+#include "client/src/core/common/crc32c_helper.h"
 #include "client/src/core/common/errors.h"
 #include "client/src/data/http_crc32c.h"
 
@@ -169,6 +170,7 @@ Result<TransferOutcome> HttpTransferPath::GetObjectParallel(
   outcome.etag              = std::move(etag);
   outcome.version           = std::move(version);
   outcome.bytes_transferred = total_bytes;
+  outcome.server_crc32c     = std::nullopt;  // 并行路径无法校验 CRC
   return Result<TransferOutcome>::Success(std::move(outcome));
 }
 
@@ -190,11 +192,7 @@ Result<TransferOutcome> HttpTransferPath::PutObject(
   }
 
   // V2：本期默认 send_crc32c=true，算一次 CRC32C 注入 header 让 server 端校验。
-  std::optional<std::uint32_t> crc;
-  if (options_.http.send_crc32c && buffer.size > 0 && buffer.data != nullptr) {
-    crc = Crc32c(std::span<const std::byte>(
-        static_cast<const std::byte*>(buffer.data), buffer.size));
-  }
+  auto crc = ComputeClientCrc32c(buffer, options_.http.send_crc32c);
   auto report = data_client_.PutObject(request.object, buffer, crc);
   if (!report.success()) return Result<TransferOutcome>::Failure(report.error());
 
@@ -240,6 +238,7 @@ Result<TransferOutcome> HttpTransferPath::PutObjectPart(
   outcome.selected_path     = kPath;
   outcome.transfer_status   = "completed";
   outcome.etag              = part.value().etag;   // part_etag
+  outcome.version           = "";  // PutPart 无 version，由最终 CompleteMultipart 返回
   outcome.bytes_transferred = buffer.size;
   outcome.server_crc32c     = part.value().server_crc32c;
   // Multipart 单 part 完成回调；上层 MultipartUpload::UploadParts 串起多 part 进度。

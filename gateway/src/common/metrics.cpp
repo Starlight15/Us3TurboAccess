@@ -71,14 +71,17 @@ ScopedLatency::~ScopedLatency() {
 
 ScopedHttpInflight::ScopedHttpInflight(bvar::Adder<std::int64_t>& inflight,
                                         bvar::Adder<std::int64_t>& aborted)
-    : inflight_(inflight), aborted_counter_(aborted) {
+    : inflight_(inflight), aborted_counter_(aborted), active_(true) {
   inflight_ << 1;
 }
 
 ScopedHttpInflight::~ScopedHttpInflight() {
-  inflight_ << -1;
-  if (aborted_) {
-    aborted_counter_ << 1;
+  if (active_) {
+    inflight_ << -1;
+    active_ = false;
+    if (aborted_) {
+      aborted_counter_ << 1;
+    }
   }
 }
 

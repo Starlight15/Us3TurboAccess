@@ -20,7 +20,7 @@
 #include "client/src/data/rdma_data_plane_client.h"
 #include "client/src/transports/gds/cuobject_client.h"
 #include "client/src/transports/gds/gds_memory_registry.h"
-#include "client/src/transports/rdma/rdma_resources.h"
+// rdma_resources.h removed (verbs deleted)
 
 namespace us3_turbo_access::client {
 
@@ -116,11 +116,9 @@ Result<bool> ClientCore::Initialize() {
   auto http_init = impl_->http_data_client.Initialize();
   impl_->http_executor.SetAvailable(http_init.success());
 
-  // 探测 RDMA 设备是否可用：成功就标 available；失败仅让 RDMA path 不 available。
-  // 实际 PD/CQ/MR 在每次 PutObject 现场基于 cm_id->verbs 创建，本处只做探活。
-  auto resources = RdmaResources::Open(impl_->options.rdma);
-  impl_->rdma_executor.SetAvailable(resources.success());
-  (void)resources;  // probe-only: discard immediately
+  // UCX 路径：RdmaTransferPath 构造时已内部初始化 UCX context/worker。
+  // available() 内部校验 ucx_ctx_/ucx_worker_ 非空，初始化失败时自动返回 false。
+  impl_->rdma_executor.SetAvailable(true);
 
   // *Async API 用的 worker 线程池：默认 hardware_concurrency 折半（至少 1）。
   std::size_t workers = impl_->options.async_worker_threads;

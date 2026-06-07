@@ -4,26 +4,29 @@ package us3_turbo_access.gateway;
 
 option cc_generic_services = true;
 
-// 一次 RDMA 上传的协议时序：
+// UCX RMA WRITE 上传协议时序：
 //   1) (control plane) OpenSession → session_id
-//   2) DiscoverRdmaEndpoint(session_id) → 取 gateway 的 RDMA 监听端点
-//   3) 客户端 CM connect 到端点；ESTABLISHED 时 server 通过 private_data
-//      回传 conn_token（标识本条已建好的 QP）
-//   4) BindSessionToConnection(session_id, conn_token) → 服务端在该连接的 PD
-//      上为 session 分配 buffer + reg MR，返回 raddr/rkey
-//   5) 客户端 RDMA WRITE → CommitObject 触发落盘 → 归还 QP 到本地连接池
+//   2) PrepareTransfer(session_id, transfer_bytes)
+//      → gateway: 分配+注册 gw_buf，ucp_rkey_pack；返回 ucx_port/gw_raddr/gw_packed_rkey
+//   3) client: ucp_ep_create(ucx_port) + ucp_ep_rkey_unpack(gw_packed_rkey)
+//      + ucp_put_nbx(gw_raddr, data) + ucp_ep_flush_nbx
+//   4) CommitObject → gateway: 等 write_done → CRC → WriteRange → etag
+//   5) client 收到 CommitObject 成功后: ep_close
 
 message RdmaDiscoverRequest {
-  string session_id = 1;
+  string session_id     = 1;
+  uint64 transfer_bytes = 4;  // WRITE: 本次传输字节数（用于 gateway 分配 gw_buf）
+  reserved 2, 3;              // 2=client_raddr(RMA READ, removed), 3=client_packed_rkey(removed)
 }
 
 message RdmaDiscoverResponse {
-  string host = 1;
-  uint32 port = 2;
-  // 3 was device_gid (removed: client never reads; conn_token via CM ACCEPT
-  //                   private_data is the actual handshake)
+  string host          = 1;
+  uint32 port          = 2;
   uint64 max_msg_bytes = 4;
-  reserved 3;
+  uint32 ucx_port      = 5;   // UCX listener port（client ucp_ep_create 目标）
+  uint64 gw_raddr      = 6;   // gateway buffer 虚地址（client ucp_put_nbx 目标）
+  bytes  gw_packed_rkey = 7;  // gateway ucp_rkey_pack 结果（client ucp_ep_rkey_unpack 输入）
+  reserved 3, 8;              // 3=device_gid(old), 8=ucx_tag(removed)
 }
 
 message RdmaBindRequest {

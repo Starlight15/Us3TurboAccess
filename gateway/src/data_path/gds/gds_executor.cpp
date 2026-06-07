@@ -24,14 +24,6 @@ namespace us3_turbo_access::gateway::data_path::gds {
 
 namespace {
 
-[[nodiscard]] Error MakeGdsError(ErrorCode code, std::string message,
-                                 bool retryable = true) {
-  Error err;
-  err.code = code;
-  err.message = std::move(message);
-  err.retryable = retryable;
-  return err;
-}
 
 [[nodiscard]] std::string BuildObjectId(const core::Session& session) {
   return session.bucket + "/" + session.object_key;
@@ -99,7 +91,7 @@ Result<bool> GdsExecutor::Start() {
       bind_host_.c_str(), static_cast<unsigned short>(opts_.rdma_port),
       CUOBJ_PROTO_RDMA_DC_V1);
   if (!server->isConnected()) {
-    return Result<bool>::Failure(MakeGdsError(
+    return Result<bool>::Failure(common::MakeError(
         ErrorCode::kRdmaUnavailable,
         "cuObjServer init failed on " + bind_host_ + ":" +
             std::to_string(opts_.rdma_port)));
@@ -158,7 +150,7 @@ Result<std::shared_ptr<cuObjServer>> GdsExecutor::GetServer() const {
   std::scoped_lock lock(mu_);
   if (server_ == nullptr || !server_->isConnected()) {
     return Result<std::shared_ptr<cuObjServer>>::Failure(
-        MakeGdsError(ErrorCode::kRdmaUnavailable,
+        common::MakeError(ErrorCode::kRdmaUnavailable,
                      "cuObjServer not available"));
   }
   return Result<std::shared_ptr<cuObjServer>>::Success(server_);
@@ -171,7 +163,7 @@ Result<GdsExecutor::GetChunkOutcome> GdsExecutor::GetChunk(
     std::uint64_t object_offset, std::uint64_t length) {
   using Outcome = GdsExecutor::GetChunkOutcome;
   if (length > opts_.max_chunk_bytes) {
-    return Result<Outcome>::Failure(MakeGdsError(
+    return Result<Outcome>::Failure(common::MakeError(
         ErrorCode::kBadRequest,
         "GDS GET chunk exceeds 1 GiB cuObjServer limit", false));
   }
@@ -195,7 +187,7 @@ Result<GdsExecutor::GetChunkOutcome> GdsExecutor::GetChunk(
     lease = pool_ref->Acquire(static_cast<std::size_t>(length));
   }
   if (!lease.ok()) {
-    return Result<Outcome>::Failure(MakeGdsError(
+    return Result<Outcome>::Failure(common::MakeError(
         ErrorCode::kRdmaUnavailable, "cuObjServer pinned buffer alloc failed"));
   }
 
@@ -220,7 +212,7 @@ Result<GdsExecutor::GetChunkOutcome> GdsExecutor::GetChunk(
   auto server = server_lookup.value();
   const auto channel = server->allocateChannelId();
   if (channel == INVALID_CHANNEL_ID) {
-    return Result<Outcome>::Failure(MakeGdsError(
+    return Result<Outcome>::Failure(common::MakeError(
         ErrorCode::kRdmaUnavailable, "cuObjServer allocateChannelId failed"));
   }
   ChannelGuard chan_guard(*server, channel);
@@ -236,12 +228,12 @@ Result<GdsExecutor::GetChunkOutcome> GdsExecutor::GetChunk(
                   DescribeStatus(status), crc);
   }
   if (transferred < 0) {
-    return Result<Outcome>::Failure(MakeGdsError(
+    return Result<Outcome>::Failure(common::MakeError(
         ErrorCode::kRpcError,
         "cuObjServer handleGetObject failed: " + DescribeStatus(status)));
   }
   if (static_cast<std::size_t>(transferred) != actual_size) {
-    return Result<Outcome>::Failure(MakeGdsError(
+    return Result<Outcome>::Failure(common::MakeError(
         ErrorCode::kRpcError,
         "cuObjServer handleGetObject short transfer"));
   }
@@ -255,7 +247,7 @@ Result<ObjectMetadata> GdsExecutor::PutChunk(const core::Session& session,
                                              std::uint64_t object_offset,
                                              std::uint64_t length) {
   if (length > opts_.max_chunk_bytes) {
-    return Result<ObjectMetadata>::Failure(MakeGdsError(
+    return Result<ObjectMetadata>::Failure(common::MakeError(
         ErrorCode::kBadRequest,
         "GDS PUT chunk exceeds 1 GiB cuObjServer limit", false));
   }
@@ -286,13 +278,13 @@ Result<ObjectMetadata> GdsExecutor::PutChunk(const core::Session& session,
     lease = pool_ref->Acquire(static_cast<std::size_t>(length));
   }
   if (!lease.ok()) {
-    return Result<ObjectMetadata>::Failure(MakeGdsError(
+    return Result<ObjectMetadata>::Failure(common::MakeError(
         ErrorCode::kRdmaUnavailable, "cuObjServer pinned buffer alloc failed"));
   }
 
   const auto channel = server->allocateChannelId();
   if (channel == INVALID_CHANNEL_ID) {
-    return Result<ObjectMetadata>::Failure(MakeGdsError(
+    return Result<ObjectMetadata>::Failure(common::MakeError(
         ErrorCode::kRdmaUnavailable, "cuObjServer allocateChannelId failed"));
   }
   ChannelGuard chan_guard(*server, channel);
@@ -308,7 +300,7 @@ Result<ObjectMetadata> GdsExecutor::PutChunk(const core::Session& session,
                   DescribeStatus(status));
   }
   if (transferred < 0) {
-    return Result<ObjectMetadata>::Failure(MakeGdsError(
+    return Result<ObjectMetadata>::Failure(common::MakeError(
         ErrorCode::kRpcError,
         "cuObjServer handlePutObject failed: " + DescribeStatus(status)));
   }
@@ -336,7 +328,7 @@ Result<std::string> GdsExecutor::PutPart(const core::Session& session,
                                          std::uint64_t length,
                                          std::string_view checksum_policy) {
   if (length > opts_.max_chunk_bytes) {
-    return Result<std::string>::Failure(MakeGdsError(
+    return Result<std::string>::Failure(common::MakeError(
         ErrorCode::kBadRequest,
         "GDS PUT part exceeds 1 GiB cuObjServer limit", false));
   }
@@ -361,13 +353,13 @@ Result<std::string> GdsExecutor::PutPart(const core::Session& session,
     lease = pool_ref->Acquire(static_cast<std::size_t>(length));
   }
   if (!lease.ok()) {
-    return Result<std::string>::Failure(MakeGdsError(
+    return Result<std::string>::Failure(common::MakeError(
         ErrorCode::kRdmaUnavailable, "cuObjServer pinned buffer alloc failed"));
   }
 
   const auto channel = server->allocateChannelId();
   if (channel == INVALID_CHANNEL_ID) {
-    return Result<std::string>::Failure(MakeGdsError(
+    return Result<std::string>::Failure(common::MakeError(
         ErrorCode::kRdmaUnavailable, "cuObjServer allocateChannelId failed"));
   }
   ChannelGuard chan_guard(*server, channel);
@@ -384,7 +376,7 @@ Result<std::string> GdsExecutor::PutPart(const core::Session& session,
         DescribeStatus(status));
   }
   if (transferred < 0) {
-    return Result<std::string>::Failure(MakeGdsError(
+    return Result<std::string>::Failure(common::MakeError(
         ErrorCode::kRpcError,
         "cuObjServer handlePutObject failed: " + DescribeStatus(status)));
   }

@@ -1,8 +1,6 @@
 // Native RDMA 整对象 PUT 性能 bench：与 http_put_bench 同接口、同 JSON。
 //
-// RDMA 要求 kHostPinned buffer；这里 cudaHostAlloc 出一个共享 buffer，
-// N 个 worker（ClientExecutor）并发 PutObjectAsync。RDMA QP / completion
-// driver / connection pool 在 V2 已落地，本 bench 不去 tweak 它们。
+// UCX TAG 路径不需要 pinned buffer（无 ibv_reg_mr），用普通对齐内存。
 
 #include <atomic>
 #include <chrono>
@@ -20,7 +18,8 @@
 
 #include "examples/common/bench_runner.h"
 #include "us3_turbo_access/client/client.h"
-#include "us3_turbo_access/client/pinned_buffer.h"
+#include <cstdlib>
+#include <sys/mman.h>
 
 namespace {
 using namespace us3_turbo_access::client;
@@ -86,24 +85,24 @@ int main(int argc, char** argv) {
   options.client_id = "us3-rdma-put-bench";
   options.data_path = DataPath::kNativeRdma;
   options.async_worker_threads = a.threads;
-  options.rdma.send_crc32c     = false;  // 专注 throughput，与 http_put_bench 对齐
+  options.rdma.send_crc32c     = false;  // 专注 throughput
   Client client(std::move(options));
   if (auto init = client.Initialize(); !init.success()) {
     std::cerr << "Initialize failed: " << init.error().message << std::endl;
     return 1;
   }
 
-  // pinned buffer 共享给 N 个并发 PUT；buffer 在整段 bench 生命周期内有效，
-  // RDMA worker 同步 PUT 一直等 WRITE 完成回 outcome 才返回。
-  auto pin = PinnedBuffer::Allocate(a.object_size);
-  if (!pin.success()) {
-    std::cerr << "PinnedBuffer::Allocate failed: " << pin.error().message << std::endl;
+  // UCX TAG 路径使用普通对齐内存（无需 cudaHostAlloc）
+  void* raw_buf = std::aligned_alloc(4096, a.object_size);
+  if (!raw_buf) {
+    std::cerr << "aligned_alloc failed" << std::endl;
     return 1;
   }
-  FillRandom(static_cast<std::byte*>(pin.value().data()), a.object_size, a.seed);
-  ConstBufferView buf_view{.data = pin.value().data(),
+  ::mlock(raw_buf, a.object_size);  // best-effort pin
+  FillRandom(static_cast<std::byte*>(raw_buf), a.object_size, a.seed);
+  ConstBufferView buf_view{.data = raw_buf,
                            .size = a.object_size,
-                           .type = BufferType::kHostPinned};
+                           .type = BufferType::kHostRegular};
 
   // key 模数：0=每次唯一 key；>0=idx % N 限制后端容量。
   const std::size_t key_mod = a.key_modulo > 0 ? a.key_modulo : a.count;

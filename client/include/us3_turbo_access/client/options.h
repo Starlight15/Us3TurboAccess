@@ -76,44 +76,16 @@ struct HttpClientOptions {
  * Independent from GdsClientOptions: the two transports use different
  * libraries (libibverbs vs cuObject) and do not share state.
  */
+/** UCX 数据通路参数（原 verbs RDMA 字段已移除）。 */
 struct RdmaClientOptions {
-  /** RDMA HCA name; empty selects the first active device on the host. */
-  std::string device_name;
-  /** GID index used for RoCE; ignored on IB. */
-  int         gid_index{0};
-  /** InfiniBand port number to open on the selected HCA. */
-  std::uint8_t ib_port{1};
-
-  /** Maximum bytes per single RDMA transfer; capped by NIC WQE / max_msg. */
+  /** Maximum bytes per single transfer; gateway advertises its own limit too. */
   std::size_t max_msg_bytes{4ULL * 1024ULL * 1024ULL * 1024ULL};
 
-  /** Maximum idle connections kept per (gateway endpoint) bucket. */
+  /** Maximum idle UCX endpoints kept per gateway (host:ucx_port) bucket. */
   std::size_t pool_max_idle_per_endpoint{8};
-  /** Idle timeout before a pooled connection is reclaimed. */
-  std::chrono::milliseconds pool_idle_timeout{std::chrono::seconds(60)};
-  /** Timeout for the initial RDMA-CM resolve+connect handshake. */
-  std::chrono::milliseconds connect_timeout{std::chrono::seconds(5)};
 
-  /**
-   * 算 CRC32C 写到 CommitObject/CommitPart 的 client_checksum 字段，让 server
-   * 端在 commit 时与 pinned buffer 端实算 CRC 比对，不一致拒绝 commit。
-   * 与 HTTP 对齐的 end-to-end 校验机制。
-   */
+  /** Send client-side CRC32C in CommitObject for end-to-end integrity check. */
   bool send_crc32c{true};
-
-  /**
-   * Object length above which GetObject splits into parallel sub-ranges
-   * (reserved for future RDMA GET implementation; not used today).
-   * 默认 32 MiB；RDMA 单 WRITE 已是高吞吐，阈值偏高即可。
-   */
-  std::size_t parallel_get_threshold{32ULL * 1024 * 1024};
-  /** Number of parallel sub-ranges issued by split GETs (RDMA GET 预留). */
-  std::size_t parallel_get_chunks{4};
-
-  /** Size of the libibverbs completion queue. */
-  int  cq_size{4096};
-  /** Run the CQ poller in a dedicated thread instead of inline. */
-  bool dedicated_completion_thread{true};
 };
 
 /**

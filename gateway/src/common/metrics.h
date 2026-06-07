@@ -73,6 +73,13 @@ struct Metrics {
   bvar::Adder<std::int64_t>     multipart_swept_total;
   bvar::LatencyRecorder         multipart_complete_latency_us;
 
+  // UCX data path
+  bvar::Adder<std::int64_t>     ucx_put_inflight;
+  bvar::Adder<std::int64_t>     ucx_buffer_pool_hit_total;
+  bvar::Adder<std::int64_t>     ucx_buffer_pool_miss_total;
+  bvar::Adder<std::int64_t>     ucx_put_timeout_total;
+  bvar::Adder<std::int64_t>     ucx_session_orphan_total;
+
   Metrics();
 };
 
@@ -117,6 +124,7 @@ class ScopedHttpInflight {
   bvar::Adder<std::int64_t>& inflight_;
   bvar::Adder<std::int64_t>& aborted_counter_;
   bool                       aborted_{false};
+  bool                       active_{false};  // 防止析构函数重复执行
 };
 
 }  // namespace us3_turbo_access::gateway::common

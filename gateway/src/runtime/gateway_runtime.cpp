@@ -21,7 +21,7 @@
 #include "core/session/session_store.h"
 #include "core/session/session_sweeper.h"
 #include "data_path/gds/gds_executor.h"
-#include "data_path/rdma/rdma_executor.h"
+#include "data_path/ucx/ucx_executor.h"
 #include "runtime/io_worker_pool.h"
 #include "data_path/http/http_executor.h"
 #include "common/error.h"
@@ -98,23 +98,22 @@ Result<bool> GatewayRuntime::Initialize() {
     }
   }
 
-  // Native RDMA 数据通路（与 GDS 完全独立）。
-  if (options_.rdma_enable) {
-    const std::string rdma_bind =
+  // UCX 数据通路（kNativeRdma DataPath）。
+  if (options_.ucx_enable) {
+    const std::string ucx_bind =
         options_.bind_host == "0.0.0.0" ? options_.public_host : options_.bind_host;
-    rdma_executor_ = std::make_unique<data_path::rdma::RdmaExecutor>(
-        options_.public_host, rdma_bind, options_.rdma, *backend_, *metadata_,
-        multipart_coordinator_.get(), io_pool_.get(), logger_);
-    auto started = rdma_executor_->Start();
+    ucx_executor_ = std::make_unique<data_path::ucx::UcxExecutor>(
+        options_.public_host, ucx_bind, options_.ucx, *backend_, *metadata_,
+        multipart_coordinator_.get(), logger_);
+    auto started = ucx_executor_->Start();
     if (!started.success()) {
       return Result<bool>::Failure(started.error());
     }
   }
 
-  // SessionOpener 仅协调 SessionStore 与各 executor，不直接持 backend。
   session_opener_ = std::make_unique<core::SessionOpener>(
       *sessions_, http_executor_.get(), gds_executor_.get(),
-      rdma_executor_.get(), logger_);
+      ucx_executor_.get(), logger_);
 
   control_plane_ = std::make_unique<api::ControlPlaneService>(
       *sessions_, *metadata_, *session_opener_, gds_executor_.get(),
@@ -135,10 +134,10 @@ Result<bool> GatewayRuntime::Initialize() {
         ErrorCode::kInternal, "failed to register control-plane service"));
   }
 
-  // Native RDMA 数据面 service 仅在 rdma_enable=true 时注册。
-  if (rdma_executor_ != nullptr) {
+  // UCX 数据面 brpc service。
+  if (ucx_executor_ != nullptr) {
     rdma_data_plane_ = std::make_unique<api::RdmaDataPlaneService>(
-        *rdma_executor_, logger_);
+        *ucx_executor_, logger_);
     if (server_.AddService(rdma_data_plane_.get(),
                             brpc::SERVER_DOESNT_OWN_SERVICE) != 0) {
       return Result<bool>::Failure(common::MakeError(
@@ -199,10 +198,10 @@ void GatewayRuntime::Shutdown() {
     gds_executor_->Stop();
   }
   gds_executor_.reset();
-  if (rdma_executor_ != nullptr) {
-    rdma_executor_->Stop();
+  if (ucx_executor_ != nullptr) {
+    ucx_executor_->Stop();
   }
-  rdma_executor_.reset();
+  ucx_executor_.reset();
   io_pool_.reset();
   http_executor_.reset();
   multipart_coordinator_.reset();

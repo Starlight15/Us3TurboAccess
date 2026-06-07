@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <sstream>
 #include <utility>
 #include <vector>
 
@@ -273,10 +272,8 @@ Result<TransferReport> HttpExecutor::PutPart(std::string_view upload_id,
             " server=" + std::to_string(actual_crc)));
   }
 
-  // 生成 part etag（简化版本，实际应该从 backend 返回）
-  std::ostringstream etag;
-  etag << '"' << std::hex << part_number << '-' << body.size() << '"';
-  const std::string part_etag = etag.str();
+  // 使用统一 part etag 格式（替代原 ostringstream 十六进制格式）
+  const std::string part_etag = multipart_->GeneratePartEtag(part_number, body.size());
 
   multipart_->RegisterPart(*upload, part_number, /*offset=*/0,
                             static_cast<std::uint64_t>(body.size()),

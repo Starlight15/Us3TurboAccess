@@ -3,6 +3,7 @@
 #include <utility>
 
 #include "common/error.h"
+#include "common/metrics.h"
 #include "core/session/session_store.h"
 #include "data_path/data_path_executor.h"
 
@@ -29,7 +30,7 @@ data_path::IDataPathExecutor* SessionOpener::SelectExecutor(DataPath path) const
 }
 
 // 编排 OpenSession：建 session → 选 executor → 调数据面 hook。
-// 失败不回滚，依赖 sweeper 按 TTL 清理。
+// hook 失败时立即 MarkFailed，让 sweeper 尽早回收（不再依赖 TTL）。
 Result<OpenSessionResult> SessionOpener::Open(const OpenSessionParams& req) {
   auto created = sessions_.Create(req);
   if (!created.success()) {
@@ -47,6 +48,9 @@ Result<OpenSessionResult> SessionOpener::Open(const OpenSessionParams& req) {
 
   auto hook = executor->OnSessionOpened(session);
   if (!hook.success()) {
+    // 立即标记失败，让 sweeper 尽早回收，而不是等 TTL 自然过期
+    sessions_.MarkFailed(session.session_id);
+    common::metrics().ucx_session_orphan_total << 1;
     return Result<OpenSessionResult>::Failure(hook.error());
   }
 

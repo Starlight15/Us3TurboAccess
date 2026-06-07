@@ -24,7 +24,7 @@ TransferRouter::TransferRouter(DataPath data_path, const TransferPath& gds_execu
 Result<TransferOutcome> TransferRouter::GetObject(const RequestOptions& request,
                                                   MutableBufferView buffer) const {
   const auto* executor = SelectTransferPath();
-  if (executor == nullptr || !executor->available()) {
+  if (executor == nullptr) {
     return Result<TransferOutcome>::Failure(MakeNoAvailableTransportError(data_path_));
   }
   return executor->GetObject(request, buffer);

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <string>
 #include <utility>
 
 #include "common/error.h"
@@ -238,6 +239,12 @@ void MultipartCoordinator::RegisterPart(MultipartUpload& upload,
   upload.parts[part_number] = std::move(p);
   upload.last_activity_at = now;
   common::metrics().multipart_part_bytes << static_cast<std::int64_t>(size);
+}
+
+// 统一的 part etag 格式："{part_number}-{size}"（所有数据路径共用）
+std::string MultipartCoordinator::GeneratePartEtag(std::uint32_t part_number,
+                                                    std::uint64_t size) {
+  return std::to_string(part_number) + "-" + std::to_string(size);
 }
 
 }  // namespace us3_turbo_access::gateway::core::multipart

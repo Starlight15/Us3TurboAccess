@@ -43,12 +43,10 @@ DEFINE_uint64(http_max_put_bytes, 1ULL * 1024ULL * 1024ULL * 1024ULL,
 DEFINE_bool(gds_enable, true, "Enable GDS / cuObjServer data path");
 DEFINE_int32(gds_rdma_port, 18516, "GDS cuObjServer RDMA listener port");
 
-// Native RDMA 数据通路
-DEFINE_bool(rdma_enable, false, "Enable native RDMA data path");
-DEFINE_int32(rdma_port, 18515, "Native RDMA listener port");
-DEFINE_string(rdma_device, "", "RDMA HCA device name (empty = auto)");
-DEFINE_int32(rdma_ib_port, 1, "RDMA IB port number");
-DEFINE_int32(rdma_gid_index, 0, "RDMA GID index (RoCE)");
+
+// UCX 数据通路
+DEFINE_bool(ucx_enable, false, "Enable UCX data path (replaces verbs RDMA)");
+DEFINE_int32(ucx_port, 18520, "UCX listener port");
 
 namespace {
 
@@ -98,12 +96,10 @@ int main(int argc, char** argv) {
   options.gds_enable      = FLAGS_gds_enable;
   options.gds.rdma_port   = FLAGS_gds_rdma_port;
 
-  // Native RDMA 数据通路
-  options.rdma_enable        = FLAGS_rdma_enable;
-  options.rdma.listen_port   = FLAGS_rdma_port;
-  options.rdma.device_name   = FLAGS_rdma_device;
-  options.rdma.ib_port       = static_cast<std::uint8_t>(FLAGS_rdma_ib_port);
-  options.rdma.gid_index     = FLAGS_rdma_gid_index;
+
+  // UCX 数据通路
+  options.ucx_enable        = FLAGS_ucx_enable;
+  options.ucx.listen_port   = FLAGS_ucx_port;
 
   us3_turbo_access::gateway::GatewayServer server(std::move(options));
   auto started = server.Start();

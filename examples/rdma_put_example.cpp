@@ -7,7 +7,8 @@
 #include <string>
 
 #include "us3_turbo_access/client/client.h"
-#include "us3_turbo_access/client/pinned_buffer.h"
+#include <cstdlib>
+#include <sys/mman.h>
 
 int main(int argc, char** argv) {
   using namespace us3_turbo_access::client;
@@ -21,17 +22,12 @@ int main(int argc, char** argv) {
   const std::string bucket = argv[3];
   const std::string object_key = argv[4];
 
-  // 申请 host pinned buffer + 填充。
-  auto buf = PinnedBuffer::Allocate(bytes);
-  if (!buf.success()) {
-    std::cerr << "PinnedBuffer::Allocate failed: " << buf.error().message
-              << std::endl;
-    return 1;
-  }
-  auto* data = static_cast<std::byte*>(buf.value().data());
-  for (std::size_t i = 0; i < bytes; ++i) {
-    data[i] = static_cast<std::byte>(i % 251U);
-  }
+  // UCX TAG 路径使用普通对齐内存
+  void* raw = std::aligned_alloc(4096, bytes);
+  if (!raw) { std::cerr << "aligned_alloc failed" << std::endl; return 1; }
+  ::mlock(raw, bytes);
+  auto* data = static_cast<std::byte*>(raw);
+  for (std::size_t i = 0; i < bytes; ++i) { data[i] = static_cast<std::byte>(i % 251U); }
 
   ClientOptions options;
   options.endpoint = endpoint;
@@ -47,7 +43,8 @@ int main(int argc, char** argv) {
   request.object = ObjectId{.bucket = bucket, .key = object_key};
   request.length = bytes;
 
-  auto put = client.PutObject(request, buf.value().view());
+  auto put = client.PutObject(request,
+      ConstBufferView{.data = raw, .size = bytes, .type = BufferType::kHostRegular});
   if (!put.success()) {
     std::cerr << "PutObject failed: " << put.error().message << std::endl;
     return 1;

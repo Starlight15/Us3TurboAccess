@@ -49,7 +49,6 @@ target_include_directories(us3_turbo_access_http_verify_example PRIVATE ${PROJEC
 add_executable(us3_turbo_access_cuobj_probe     probe/cuobj_probe.cpp)
 add_executable(us3_turbo_access_env_probe       probe/env_probe.cpp)
 add_executable(us3_turbo_access_gds_token_probe probe/gds_token_probe.cpp)
-add_executable(us3_turbo_access_rdma_probe      probe/rdma_probe.cpp)
 
 target_include_directories(us3_turbo_access_cuobj_probe PRIVATE ${CUFILE_INCLUDE_DIR})
 target_link_libraries(us3_turbo_access_cuobj_probe PRIVATE ${CUDART_LIBRARY} dl)
@@ -61,12 +60,3 @@ target_include_directories(us3_turbo_access_gds_token_probe
   PRIVATE ${PROJECT_SOURCE_DIR} ${CUFILE_INCLUDE_DIR})
 target_link_libraries(us3_turbo_access_gds_token_probe
   PRIVATE Us3TurboAccess::client ${CUDART_LIBRARY})
-
-target_include_directories(us3_turbo_access_rdma_probe
-  PRIVATE
-    ${PROJECT_SOURCE_DIR}
-    ${PROJECT_SOURCE_DIR}/client/include
-    ${PROJECT_SOURCE_DIR}/client/src
-    ${CUFILE_INCLUDE_DIR})
-target_link_libraries(us3_turbo_access_rdma_probe
-  PRIVATE Us3TurboAccess::client ${IBVERBS_LIBRARY} ${CUDART_LIBRARY})
