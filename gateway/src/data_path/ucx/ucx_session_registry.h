@@ -1,9 +1,9 @@
 #pragma once
 
 #include <atomic>
-#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -20,9 +20,10 @@ namespace us3_turbo_access::gateway::data_path::ucx {
 /**
  * 一次 UCX RMA WRITE session 的服务端状态。
  *
- * PrepareTransfer 时从 UcxBufferPool Acquire 一个已注册 MR 的 slot（含
- * gw_raddr/packed_rkey），直接下发给 client；client PUT 写入后发 AM_WRITE_DONE；
- * CommitObject 等 write_done 后 CRC + WriteRange 落盘，再 Return slot 到 pool。
+ * PrepareTransfer 时从 UcxBufferPool Acquire 一个已注册 MR 的 slot；
+ * client ucp_put_nbx 写入后发 AM_WRITE_DONE；OnAmWriteDone 触发时：
+ *   - 若 CommitObject/CommitPart 已到达且注册了 pending_commit：直接执行（零等待）
+ *   - 否则置 write_done，CommitObject/CommitPart 到达时检查后立即执行
  */
 struct UcxSessionEntry {
   std::string              session_id;
@@ -34,10 +35,12 @@ struct UcxSessionEntry {
   RegisteredBuffer*        slot{nullptr};
   std::size_t              transfer_bytes{0};
 
-  // write_done：client AM_WRITE_DONE 后置位，CommitObject 等待
+  // 异步 commit 协议：write_done 和 pending_commit 共用同一把锁
+  // write_done=true 表示 AM_WRITE_DONE 已收到，数据已在 buffer
+  // pending_commit 非空表示 CommitObject/Part RPC 已到达但数据尚未就绪，等 AM 触发
   std::atomic<bool>        write_done{false};
-  std::mutex               write_mu;
-  std::condition_variable  write_cv;
+  std::mutex               commit_mu;
+  std::function<void()>    pending_commit;  // 由 OnAmWriteDone 在 ProgressLoop 线程调用
 };
 
 class UcxSessionRegistry {

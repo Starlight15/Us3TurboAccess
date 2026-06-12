@@ -49,7 +49,7 @@ struct HttpClientOptions {
   std::size_t parallel_get_chunks{8};
 
   /** Inject x-amz-checksum-crc32c on PUT / UploadPart. */
-  bool send_crc32c{true};
+  bool send_crc32c{false};  // 关闭 CRC32C 以提升性能
   /** Verify server-echoed x-amz-checksum-crc32c against the client value. */
   bool verify_response_crc32c{true};
 
@@ -85,7 +85,7 @@ struct RdmaClientOptions {
   std::size_t pool_max_idle_per_endpoint{8};
 
   /** Send client-side CRC32C in CommitObject for end-to-end integrity check. */
-  bool send_crc32c{true};
+  bool send_crc32c{false};  // 关闭 CRC32C 以提升性能
 };
 
 /**

@@ -1,0 +1,19 @@
+=== RDMA PUT Benchmark Suite ===
+
+--- threads=1 size=1048576 count=25 ---
+
+--- threads=1 size=4194304 count=25 ---
+
+--- threads=1 size=16777216 count=25 ---
+
+--- threads=4 size=1048576 count=100 ---
+
+--- threads=4 size=4194304 count=100 ---
+
+--- threads=4 size=16777216 count=100 ---
+
+--- threads=8 size=1048576 count=200 ---
+
+--- threads=8 size=4194304 count=200 ---
+
+--- threads=8 size=16777216 count=200 ---

@@ -52,14 +52,22 @@ void RdmaDataPlaneService::CommitObject(
     const ::us3_turbo_access::gateway::RdmaCommitRequest* request,
     ::us3_turbo_access::gateway::RdmaCommitResponse* response,
     google::protobuf::Closure* done) {
-  brpc::ClosureGuard done_guard(done);
   auto* cntl = static_cast<brpc::Controller*>(cntl_base);
-  auto info = executor_.CommitObject(request->session_id(),
-                                      request->bytes_transferred(),
-                                      request->client_checksum());
-  if (!info.success()) { cntl->SetFailed(info.error().message); return; }
-  response->set_etag(info.value().etag);
-  response->set_version(info.value().version);
+
+  bool sync = executor_.CommitObjectAsync(
+      request->session_id(),
+      request->bytes_transferred(),
+      request->client_checksum(),
+      [cntl, response, done](Result<data_path::ucx::UcxCommitInfo> info) {
+        if (!info.success()) { cntl->SetFailed(info.error().message); }
+        else {
+          response->set_etag(info.value().etag);
+          response->set_version(info.value().version);
+        }
+        done->Run();
+      });
+
+  if (!sync) return;
 }
 
 void RdmaDataPlaneService::CommitPart(
@@ -67,14 +75,19 @@ void RdmaDataPlaneService::CommitPart(
     const ::us3_turbo_access::gateway::RdmaCommitPartRequest* request,
     ::us3_turbo_access::gateway::RdmaCommitPartResponse* response,
     google::protobuf::Closure* done) {
-  brpc::ClosureGuard done_guard(done);
   auto* cntl = static_cast<brpc::Controller*>(cntl_base);
-  auto info = executor_.CommitPart(request->session_id(), request->upload_id(),
-                                    request->part_number(),
-                                    request->bytes_transferred(),
-                                    request->client_checksum());
-  if (!info.success()) { cntl->SetFailed(info.error().message); return; }
-  response->set_part_etag(info.value().part_etag);
+
+  bool sync = executor_.CommitPartAsync(
+      request->session_id(), request->upload_id(),
+      request->part_number(), request->bytes_transferred(),
+      request->client_checksum(),
+      [cntl, response, done](Result<data_path::ucx::UcxCommitPartInfo> info) {
+        if (!info.success()) { cntl->SetFailed(info.error().message); }
+        else { response->set_part_etag(info.value().part_etag); }
+        done->Run();
+      });
+
+  if (!sync) return;
 }
 
 void RdmaDataPlaneService::AbortSession(

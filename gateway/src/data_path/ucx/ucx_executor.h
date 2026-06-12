@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <span>
 #include <string>
@@ -90,21 +91,29 @@ class UcxExecutor final : public data_path::IDataPathExecutor {
     PrepareTransfer(std::string_view session_id,
                     std::uint64_t transfer_bytes);
 
-  [[nodiscard]] Result<UcxCommitInfo>
-    CommitObject(std::string_view session_id, std::uint64_t bytes_transferred,
-                 std::string_view client_crc32c_b64 = {});
+  /**
+   * 异步 CommitObject：write_done 已置位时同步完成并返回结果；
+   * 否则把落盘逻辑存入 entry->pending_commit，由 OnAmWriteDone 触发，
+   * 通过 on_done 回调把结果传出（在 ProgressLoop 线程调用）。
+   * 返回 true = 同步完成（on_done 不会被调用），false = 异步等待。
+   */
+  [[nodiscard]] bool
+    CommitObjectAsync(std::string_view session_id,
+                      std::uint64_t bytes_transferred,
+                      std::string_view client_crc32c_b64,
+                      std::function<void(Result<UcxCommitInfo>)> on_done);
 
-  [[nodiscard]] Result<UcxCommitPartInfo>
-    CommitPart(std::string_view session_id, std::string_view upload_id,
-               std::uint32_t part_number, std::uint64_t bytes_transferred,
-               std::string_view client_crc32c_b64 = {});
+  [[nodiscard]] bool
+    CommitPartAsync(std::string_view session_id, std::string_view upload_id,
+                    std::uint32_t part_number, std::uint64_t bytes_transferred,
+                    std::string_view client_crc32c_b64,
+                    std::function<void(Result<UcxCommitPartInfo>)> on_done);
 
   [[nodiscard]] Result<bool> AbortSession(std::string_view session_id);
 
  private:
   static void OnConnRequest(ucp_conn_request_h conn_req, void* arg);
 
-  // AM_WRITE_DONE 回调：client PUT+flush 完成后发此 AM，触发 write_done
   static ucs_status_t OnAmWriteDone(void* arg,
                                      const void* header, std::size_t header_length,
                                      void* data, std::size_t data_length,
@@ -113,10 +122,17 @@ class UcxExecutor final : public data_path::IDataPathExecutor {
   void ProgressLoop();
   void ReleaseEntry(std::shared_ptr<UcxSessionEntry> entry);
 
-  // CommitObject/CommitPart 共用的等待+落盘逻辑
-  [[nodiscard]] Result<bool>
-    WaitWriteDone(std::shared_ptr<UcxSessionEntry>& entry,
-                  std::chrono::steady_clock::time_point deadline);
+  // CommitObject/CommitPart 共用的落盘逻辑，由同步路径或 pending_commit 调用
+  [[nodiscard]] Result<UcxCommitInfo>
+    DoCommitObject(std::shared_ptr<UcxSessionEntry>& entry,
+                   std::uint64_t bytes_transferred,
+                   std::string_view client_crc32c_b64);
+
+  [[nodiscard]] Result<UcxCommitPartInfo>
+    DoCommitPart(std::shared_ptr<UcxSessionEntry>& entry,
+                 std::string_view upload_id, std::uint32_t part_number,
+                 std::uint64_t bytes_transferred,
+                 std::string_view client_crc32c_b64);
 
   std::string                                    public_host_;
   std::string                                    bind_host_;

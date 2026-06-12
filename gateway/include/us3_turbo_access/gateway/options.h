@@ -62,7 +62,7 @@ struct UcxOptions {
   /** CommitObject 等待 ep_ready + GET 完成的总 deadline；超时返回 kTimeout（retryable）。 */
   std::chrono::milliseconds commit_data_timeout{std::chrono::milliseconds(5000)};
   /** buffer pool 最大空闲数；0 = 不复用（每次 malloc+mlock）。 */
-  std::size_t buffer_pool_max_idle{16};
+  std::size_t buffer_pool_max_idle{128};  // 增大以支持高并发
   /** Session 超时时间（PrepareTransfer 分配 buffer 到 CommitObject）。 */
   std::chrono::seconds session_ttl{std::chrono::seconds(120)};
 };
