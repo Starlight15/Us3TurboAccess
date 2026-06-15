@@ -560,7 +560,7 @@ void HttpFrontend::HandleStartUpload(brpc::Controller* cntl,
     params.idempotency_key = *q;
   }
 
-  auto out = multipart_.StartUpload(params);
+  auto out = multipart_.CreateUpload(params);
   if (!out.success()) {
     WriteError(cntl, gateway_id_, out.error());
     return;

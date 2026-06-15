@@ -46,7 +46,7 @@ class MultipartCoordinator {
                        std::shared_ptr<spdlog::logger> logger);
 
   [[nodiscard]] Result<StartUploadResult>
-    StartUpload(const StartUploadParams& params);
+    CreateUpload(const StartUploadParams& params);
 
   [[nodiscard]] Result<ObjectMetadata>
     CompleteUpload(std::string_view upload_id,

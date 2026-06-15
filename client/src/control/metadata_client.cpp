@@ -104,36 +104,43 @@ Result<ObjectMetadata> MetadataClient::HeadObject(const ObjectId& object) const 
   return Result<ObjectMetadata>::Success(std::move(metadata));
 }
 
-Result<StartUploadOutcome> MetadataClient::StartUpload(
-    const StartUploadOptions& opts) const {
+// RPC 参数构造 helper：ObjectDescriptor → protobuf request。
+static us3_turbo_access::gateway::StartUploadRequest BuildStartUploadRequest(
+    const ObjectDescriptor& desc) {
+  us3_turbo_access::gateway::StartUploadRequest req;
+  req.set_bucket(desc.object.bucket);
+  req.set_object_key(desc.object.key);
+  req.set_expected_total_size(
+      static_cast<std::uint64_t>(desc.expected_total_size.value_or(0)));
+  req.set_data_path(std::string(ToString(desc.data_path)));
+  req.set_idempotency_key(desc.idempotency_key);
+  return req;
+}
+
+// 职责：RPC 封装与响应解析；不含业务逻辑。
+Result<StartUploadResult> MetadataClient::RpcStartUpload(
+    const ObjectDescriptor& desc) const {
   if (!initialized()) {
-    return Result<StartUploadOutcome>::Failure(MakeNotInitialized("Metadata client"));
+    return Result<StartUploadResult>::Failure(MakeNotInitialized("Metadata client"));
   }
-  const ClientOptions& options = options_;
-  const RpcCallMetadata context{.client_id = options.client_id,
-                                  .bearer_token = options.bearer_token,
-                                  .default_headers = options.default_headers,
-                                  .timeout = options.default_timeout};
+  const RpcCallMetadata context{.client_id = options_.client_id,
+                                  .bearer_token = options_.bearer_token,
+                                  .default_headers = options_.default_headers,
+                                  .timeout = options_.default_timeout};
   brpc::Controller controller;
   ApplyRequestHeaders(controller, context);
 
-  us3_turbo_access::gateway::StartUploadRequest req;
-  req.set_bucket(opts.object.bucket);
-  req.set_object_key(opts.object.key);
-  req.set_expected_total_size(static_cast<std::uint64_t>(opts.expected_total_size));
-  req.set_data_path(std::string(ToString(opts.data_path)));
-  req.set_idempotency_key(opts.idempotency_key);
-
+  auto req = BuildStartUploadRequest(desc);
   us3_turbo_access::gateway::StartUploadResponse resp;
   stub_->StartUpload(&controller, &req, &resp, nullptr);
-  auto status = CheckRpcFailure(controller, "StartUpload RPC failed", opts.data_path, "");
+  auto status = CheckRpcFailure(controller, "RpcStartUpload failed", desc.data_path, "");
   if (!status.success()) {
-    return Result<StartUploadOutcome>::Failure(status.error());
+    return Result<StartUploadResult>::Failure(status.error());
   }
-  StartUploadOutcome out;
-  out.upload_id = resp.upload_id();
+  StartUploadResult out;
+  out.upload_id     = resp.upload_id();
   out.max_part_size = static_cast<std::size_t>(resp.max_part_size());
-  return Result<StartUploadOutcome>::Success(std::move(out));
+  return Result<StartUploadResult>::Success(std::move(out));
 }
 
 Result<CompleteUploadOutcome> MetadataClient::CompleteUpload(

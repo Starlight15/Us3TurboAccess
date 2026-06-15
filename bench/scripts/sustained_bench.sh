@@ -14,7 +14,7 @@ ROUNDS=5
 OUT_CSV="${REPO_ROOT}/bench/logs/sustained_results.csv"
 
 BRPC_PORT=18082
-RDMA_PORT=18515
+UCX_PORT=18520
 GDS_RDMA_PORT=18516
 PUBLIC_HOST="${PUBLIC_HOST:-192.168.1.198}"
 BIND_HOST="0.0.0.0"
@@ -76,7 +76,7 @@ start_gw() {
                 --bind_host="${BIND_HOST}" --backend=memory
                 --backend_capacity="${BACKEND_CAPACITY}" )
   if [[ "${rdma}" == true ]]; then
-    flags+=( --rdma_enable=true --rdma_port="${RDMA_PORT}" )
+    flags+=( --ucx_enable=true --ucx_port="${UCX_PORT}" )
   fi
   flags+=( --gds_enable="${gds}" )
   if [[ "${gds}" == true ]]; then
@@ -133,12 +133,13 @@ run_cell() {
 
   for r in $(seq 1 "${ROUNDS}"); do
     log "  round=${r}/${ROUNDS} ${path}:${mode} count=${count}"
-    local json=$("${bin}" "${args[@]}")
+    local raw=$("${bin}" "${args[@]}" 2>/dev/null)
     local rc=$?
     if [[ ${rc} -ne 0 ]]; then
       log "  FAIL rc=${rc}"
       continue
     fi
+    local json=$(echo "${raw}" | grep '^{' | tail -n1)
     local row=$(extract "${json}")
     echo "${r},${row}" >> "${OUT_CSV}"
   done

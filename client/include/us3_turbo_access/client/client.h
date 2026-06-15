@@ -8,24 +8,12 @@
 
 #include "us3_turbo_access/client/options.h"
 #include "us3_turbo_access/client/result.h"
+#include "us3_turbo_access/client/types.h"
 
 namespace us3_turbo_access::client {
 
 class ClientCore;
 class Client;
-
-/**
- * @brief Server-issued state required to upload parts of a multipart object.
- *
- * Returned by Client::StartUpload. The caller must echo upload_id back on
- * every UploadPart and on the matching Complete or Abort call.
- */
-struct StartUploadResult {
-  /** Opaque upload identifier issued by the gateway. */
-  std::string upload_id;
-  /** Maximum bytes accepted per part on this upload (gateway-enforced). */
-  std::size_t max_part_size{0};
-};
 
 /**
  * @brief Final manifest returned after a successful multipart Complete.

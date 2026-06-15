@@ -13,37 +13,26 @@ namespace us3_turbo_access::client {
 //   HTTP   → HttpDataClient (HTTP REST)
 //   其他   → MetadataClient  (baidu_std)
 
-Result<UploadCoordinator::StartResult> UploadCoordinator::StartUpload(
-    DataPath data_path, const ObjectId& object,
-    std::size_t expected_total_size, const std::string& idempotency_key) {
-  if (data_path == DataPath::kHttpTcp) {
+// 职责：按 data_path 路由控制面；不含参数转换或业务逻辑。
+Result<StartUploadResult> UploadCoordinator::RouteStartUpload(
+    const ObjectDescriptor& desc) {
+  if (desc.data_path == DataPath::kHttpTcp) {
     // ---- HTTP 独立路径 ----
     auto out = core_.http_data_client().StartUpload(
-        object, static_cast<std::uint64_t>(expected_total_size),
-        idempotency_key);
+        desc.object,
+        static_cast<std::uint64_t>(desc.expected_total_size.value_or(0)),
+        desc.idempotency_key);
     if (!out.success()) {
-      return Result<StartResult>::Failure(out.error());
+      return Result<StartUploadResult>::Failure(out.error());
     }
-    StartResult r;
+    StartUploadResult r;
     r.upload_id     = std::move(out.value().upload_id);
     r.max_part_size = out.value().max_part_size;
-    return Result<StartResult>::Success(std::move(r));
+    return Result<StartUploadResult>::Success(std::move(r));
   }
 
   // ---- GDS / RDMA 独立路径 ----
-  StartUploadOptions opts;
-  opts.object              = object;
-  opts.expected_total_size = expected_total_size;
-  opts.data_path           = data_path;
-  opts.idempotency_key     = idempotency_key;
-  auto out = core_.metadata_client().StartUpload(opts);
-  if (!out.success()) {
-    return Result<StartResult>::Failure(out.error());
-  }
-  StartResult r;
-  r.upload_id     = std::move(out.value().upload_id);
-  r.max_part_size = out.value().max_part_size;
-  return Result<StartResult>::Success(std::move(r));
+  return core_.metadata_client().RpcStartUpload(desc);
 }
 
 Result<UploadCoordinator::CompleteResult> UploadCoordinator::CompleteUpload(
@@ -92,21 +81,19 @@ Result<bool> UploadCoordinator::AbortUpload(DataPath data_path,
   return core_.metadata_client().AbortUpload(upload_id, data_path);
 }
 
-// 数据面收敛：把 client.cpp 中三个 UploadPart{Http,Rdma,Gds} helper 聚合
-// 进来。三通路差异：
+// 数据面收敛：三通路差异：
 //   HTTP/RDMA: length=buffer.size 让 server 预分配 buffer
 //   GDS:       length 留空（保留 expected_size=0 跳过整对象 Reserve 的行为）
 Result<TransferOutcome> UploadCoordinator::UploadPart(
-    DataPath data_path, const ObjectId& object,
-    const std::string& checksum_policy, const std::string& upload_id,
-    std::uint32_t part_number, std::uint64_t object_offset,
+    const ObjectDescriptor& desc,
+    const std::string& upload_id, std::uint32_t part_number,
     ConstBufferView buffer) {
   RequestOptions request;
-  request.object          = object;
-  request.offset          = object_offset;
-  request.checksum_policy = checksum_policy;
+  request.object          = desc.object;
+  request.offset          = desc.offset.value_or(0);
+  request.checksum_policy = desc.checksum_policy;
 
-  switch (data_path) {
+  switch (desc.data_path) {
     case DataPath::kHttpTcp:
       request.length = buffer.size;
       return core_.http_transfer_path().PutObjectPart(request, buffer,

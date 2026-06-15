@@ -295,6 +295,7 @@ void ControlPlaneService::HandleGdsPut(
                   /*crc32c=*/0, response);
 }
 
+// 职责：RPC request/response 适配；不含业务逻辑。
 void ControlPlaneService::StartUpload(
     google::protobuf::RpcController* cntl_base,
     const ::us3_turbo_access::gateway::StartUploadRequest* request,
@@ -303,15 +304,15 @@ void ControlPlaneService::StartUpload(
   brpc::ClosureGuard done_guard(done);
   auto* cntl = static_cast<brpc::Controller*>(cntl_base);
   core::multipart::StartUploadParams params;
-  params.bucket = request->bucket();
-  params.object_key = request->object_key();
+  params.bucket          = request->bucket();
+  params.object_key      = request->object_key();
   if (request->expected_total_size() != 0U) {
     params.expected_total_size =
         static_cast<std::size_t>(request->expected_total_size());
   }
-  params.data_path = request->data_path();
+  params.data_path       = request->data_path();
   params.idempotency_key = request->idempotency_key();
-  auto out = multipart_.StartUpload(params);
+  auto out = multipart_.CreateUpload(params);
   if (!out.success()) {
     cntl->SetFailed(out.error().message);
     return;

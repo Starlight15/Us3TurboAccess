@@ -22,7 +22,8 @@ MultipartCoordinator::MultipartCoordinator(
 
 // 创建 multipart upload。分两个 ID：backend_upload_id 给 backend，
 // upload_id 暴露给客户端，避免 backend 句柄格式渗透到 wire。
-Result<StartUploadResult> MultipartCoordinator::StartUpload(
+// 职责：backend 初始化 + store 登记 + 返回 upload_id；不含控制面协议逻辑。
+Result<StartUploadResult> MultipartCoordinator::CreateUpload(
     const StartUploadParams& params) {
   auto backend_id = backend_.StartMultipart(
       params.bucket, params.object_key, params.expected_total_size);

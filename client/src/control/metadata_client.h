@@ -18,18 +18,6 @@ struct PartCompletion {
   std::string   etag;
 };
 
-struct StartUploadOptions {
-  ObjectId    object;
-  std::size_t expected_total_size{0};
-  DataPath    data_path{DataPath::kGdsCuObject};
-  std::string idempotency_key;
-};
-
-struct StartUploadOutcome {
-  std::string upload_id;
-  std::size_t max_part_size{0};
-};
-
 struct CompleteUploadOutcome {
   std::string etag;
   std::string version;
@@ -40,10 +28,6 @@ class ChannelRegistry;
 
 class MetadataClient {
  public:
-  /**
-   * 构造接受 ChannelRegistry&（提供共享 baidu_std Channel）。
-   * Initialize 时取 registry.baidu_std() 作为 stub 的 channel。
-   */
   MetadataClient(ChannelRegistry& registry, const ClientOptions& options);
 
   [[nodiscard]] Result<bool> Initialize();
@@ -54,8 +38,8 @@ class MetadataClient {
       const SessionOpening& request) const;
   [[nodiscard]] Result<ObjectMetadata> HeadObject(const ObjectId& object) const;
 
-  [[nodiscard]] Result<StartUploadOutcome>
-    StartUpload(const StartUploadOptions& opts) const;
+  [[nodiscard]] Result<StartUploadResult>
+    RpcStartUpload(const ObjectDescriptor& desc) const;
   [[nodiscard]] Result<CompleteUploadOutcome>
     CompleteUpload(const std::string& upload_id,
                    const std::vector<PartCompletion>& parts,
@@ -73,7 +57,6 @@ class MetadataClient {
   [[nodiscard]] Result<bool>
     AbortSession(const std::string& session_id) const;
 
-  /** 供 ApplyRequestTimeout 等访问 options。 */
   [[nodiscard]] const ClientOptions& options() const noexcept { return options_; }
 
  private:

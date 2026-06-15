@@ -20,23 +20,9 @@ class ClientCore;
  *   GDS/RDMA 路径: MetadataClient   (baidu_std: ControlPlaneService)
  *
  * Coordinator 仅按 data_path 透明分发，不试图统一两端协议。
- *
- * Server 隔离：A.1 后 server 端 MultipartCoordinator 在 Complete/Abort 强校验
- * upload->data_path 与调用方 data_path 必须一致；跨通路调用（例如 HTTP REST
- * 试图 Complete 一个 GDS 启动的 upload）会被 server 端 kBadRequest 拒绝。
- * Server 端 upload_id 命名空间是共享的（同一 MultipartStore），但通过 data_path
- * 校验保证使用语义上的隔离。
- *
- * 数据面（B.4 后）：UploadPart 也走 Coordinator 透明分发，三个 TransferPath
- * 的 PutObjectPart 实际都在这里聚合，不再由 client.cpp 用 switch 自己 fanout。
  */
 class UploadCoordinator {
  public:
-  struct StartResult {
-    std::string upload_id;
-    std::size_t max_part_size{0};
-  };
-
   struct CompleteResult {
     std::string etag;
     std::string version;
@@ -51,46 +37,29 @@ class UploadCoordinator {
   explicit UploadCoordinator(ClientCore& core) : core_(core) {}
 
   /**
-   * StartUpload: 按 data_path 分发到 HttpDataClient 或 MetadataClient。
-   * @param data_path     选择控制面通道（kHttpTcp 走 HTTP，其它走 baidu_std）
-   * @param bucket/key    对象标识
-   * @param expected_size 0 表示未知；非 0 让 server 端可预估
-   * @param idempotency_key 用户透传的去重 key
+   * RouteStartUpload: 按 descriptor.data_path 分发到 HttpDataClient 或 MetadataClient。
+   * 返回统一的 StartUploadResult（与 MetadataClient::RpcStartUpload 共享同一类型）。
    */
-  [[nodiscard]] Result<StartResult>
-    StartUpload(DataPath data_path, const ObjectId& object,
-                std::size_t expected_total_size,
-                const std::string& idempotency_key);
+  [[nodiscard]] Result<StartUploadResult>
+    RouteStartUpload(const ObjectDescriptor& desc);
 
-  /**
-   * CompleteUpload: 同样按 data_path 分发。
-   * HTTP 走 /v1/uploads/{id}/complete；其它走 baidu_std CompleteUpload。
-   */
   [[nodiscard]] Result<CompleteResult>
     CompleteUpload(DataPath data_path, const std::string& upload_id,
                    const std::vector<PartRef>& parts);
 
-  /**
-   * AbortUpload: 同样按 data_path 分发；best-effort（用于析构兜底 / Complete 失败）。
-   */
   [[nodiscard]] Result<bool>
     AbortUpload(DataPath data_path, const std::string& upload_id);
 
   /**
-   * UploadPart: 数据面收敛入口。按 data_path 分发到对应 TransferPath::PutObjectPart：
-   *   - kHttpTcp    : core.http_transfer_path().PutObjectPart
-   *   - kNativeRdma : core.rdma_transfer_path().PutObjectPart
-   *   - kGdsCuObject: core.gds_transfer_path().PutObjectPart
-   *
-   * 三通路差异（length / expected_size 语义）由这里统一组装 RequestOptions：
-   *   - HTTP/RDMA: length = buffer.size 让 server 端能预分配 buffer
-   *   - GDS:       length 留空保留原"expected_size=0 跳过整对象 Reserve"行为
+   * UploadPart: 数据面收敛入口。按 desc.data_path 分发到对应 TransferPath::PutObjectPart。
+   * 三通路差异（length 语义）在此统一组装 RequestOptions：
+   *   - HTTP/RDMA: length = buffer.size
+   *   - GDS:       length 留空
    */
   [[nodiscard]] Result<TransferOutcome>
-    UploadPart(DataPath data_path, const ObjectId& object,
-               const std::string& checksum_policy,
+    UploadPart(const ObjectDescriptor& desc,
                const std::string& upload_id, std::uint32_t part_number,
-               std::uint64_t object_offset, ConstBufferView buffer);
+               ConstBufferView buffer);
 
  private:
   ClientCore& core_;

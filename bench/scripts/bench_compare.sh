@@ -43,7 +43,7 @@ MODES="put,multipart"
 
 # Gateway
 BRPC_PORT="${BRPC_PORT:-18082}"
-RDMA_PORT="${RDMA_PORT:-18515}"
+UCX_PORT="${UCX_PORT:-18520}"
 GDS_RDMA_PORT="${GDS_RDMA_PORT:-18516}"
 PUBLIC_HOST="${PUBLIC_HOST:-192.168.1.198}"
 BIND_HOST="${BIND_HOST:-0.0.0.0}"
@@ -125,7 +125,7 @@ start_gateway() {
   local gds_enable="$2"
   local extra_flags=()
   if [[ "${rdma_enable}" == "true" ]]; then
-    extra_flags+=( --rdma_enable=true --rdma_port="${RDMA_PORT}" )
+    extra_flags+=( --ucx_enable=true --ucx_port="${UCX_PORT}" )
   fi
   extra_flags+=( --gds_enable="${gds_enable}" )
   if [[ "${gds_enable}" == "true" ]]; then
@@ -198,17 +198,21 @@ run_one() {
             --count="${MP_COUNT}" --warmup="${MP_WARMUP}" )
   fi
   log "run ${path}:${mode} round=${round}"
-  local json_line
+  local raw_out
   if [[ -n "${CPUS}" ]]; then
-    json_line=$(taskset -c "${CPUS}" "${bin}" "${args[@]}")
+    raw_out=$(taskset -c "${CPUS}" "${bin}" "${args[@]}" 2>/dev/null)
   else
-    json_line=$("${bin}" "${args[@]}")
+    raw_out=$("${bin}" "${args[@]}" 2>/dev/null)
   fi
   local rc=$?
   if [[ ${rc} -ne 0 ]]; then
     log "FAIL ${path}:${mode} round=${round} rc=${rc}"
     return ${rc}
   fi
+  # bench 每次在 stdout 最后一行输出 JSON；UCX wakeup 噪音写 stderr，
+  # 但某些环境下也可能混入 stdout。只取最后一行。
+  local json_line
+  json_line=$(echo "${raw_out}" | grep '^{' | tail -n1)
   echo "${json_line}"
   json_to_csv_fields "${round}" "${json_line}" >> "${OUT_CSV}"
 }

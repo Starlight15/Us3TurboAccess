@@ -62,6 +62,25 @@ struct ObjectId {
 };
 
 /**
+ * @brief Object identity + request context packed together for upload/multipart chains.
+ *
+ * Use this to pass the common trio (object, data_path, request attributes) as a
+ * single argument instead of repeating individual fields across layers.
+ * ObjectId is kept separate and continues to represent pure object identity.
+ */
+struct ObjectDescriptor {
+  ObjectId    object;
+  DataPath    data_path{DataPath::kGdsCuObject};
+  std::string checksum_policy{"none"};
+
+  std::optional<std::uint64_t> offset;
+  std::optional<std::uint64_t> length;
+
+  std::optional<std::size_t> expected_total_size;
+  std::string idempotency_key;
+};
+
+/**
  * @brief Progress snapshot reported during a transfer.
  */
 struct TransferProgress {
@@ -150,6 +169,20 @@ struct TransferOutcome {
    * 错误（不会把结果交给调用方）；PUT 路径下 server 校验失败也是同样语义。
    */
   std::optional<std::uint32_t> server_crc32c;
+};
+
+/**
+ * @brief Result returned by a successful StartUpload call.
+ *
+ * Shared by the public Client::StartUpload API and the internal
+ * MetadataClient / UploadCoordinator layers so all layers use one
+ * canonical type instead of parallel structs.
+ */
+struct StartUploadResult {
+  /** Opaque upload identifier issued by the gateway. */
+  std::string upload_id;
+  /** Maximum bytes accepted per part on this upload (gateway-enforced). */
+  std::size_t max_part_size{0};
 };
 
 /**
