@@ -7,12 +7,17 @@ namespace us3_turbo_access::client {
 class HttpDataClient;
 class HttpTransferPath;
 
+// HttpMultipartFlow / HttpMultipartSession 实现标准 S3 风格的 multipart：
+//   StartUpload (HTTP)
+//   → PutObjectPart (HTTP，每 part 一次 PUT，gateway 返回 part_etag)
+//   → CompleteUpload / AbortUpload (HTTP)
+// 整条链路只走 HttpDataClient + HttpTransferPath，不依赖 control plane RPC。
 class HttpMultipartFlow final : public IMultipartFlow {
  public:
   HttpMultipartFlow(HttpDataClient& data_client, const HttpTransferPath& transfer_path);
 
   Result<std::unique_ptr<IMultipartSession>>
-    Start(const ObjectDescriptor& desc) override;
+    CreateSession(const ObjectDescriptor& desc) override;
 
  private:
   HttpDataClient&         data_client_;

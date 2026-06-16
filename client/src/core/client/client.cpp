@@ -424,7 +424,7 @@ Result<MultipartUpload> Client::StartUpload(const ObjectId& object,
   impl->data_path = desc.data_path;
 
   auto& flow = core_->upload_coordinator().SelectFlow(desc.data_path);
-  auto session_out = flow.Start(desc);
+  auto session_out = flow.CreateSession(desc);
   if (!session_out.success()) {
     return Result<MultipartUpload>::Failure(session_out.error());
   }

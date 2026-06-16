@@ -65,7 +65,7 @@ RdmaMultipartFlow::RdmaMultipartFlow(const MetadataClient& metadata,
     : metadata_(metadata), transfer_path_(transfer_path) {}
 
 Result<std::unique_ptr<IMultipartSession>>
-RdmaMultipartFlow::Start(const ObjectDescriptor& desc) {
+RdmaMultipartFlow::CreateSession(const ObjectDescriptor& desc) {
   auto out = metadata_.RpcCreateMultipartUpload(desc);
   if (!out.success()) {
     return Result<std::unique_ptr<IMultipartSession>>::Failure(out.error());

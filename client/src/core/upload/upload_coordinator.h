@@ -9,6 +9,15 @@ namespace us3_turbo_access::client {
 
 class ClientCore;
 
+// UploadCoordinator —— multipart flow 注册表。
+//
+// 当前职责只剩一件事：按 DataPath 把请求路由到对应的 IMultipartFlow
+// （HTTP / RDMA / GDS）。三条 flow 在 Client 生命周期内常驻，调用方
+// 拿到的引用 non-owning。
+//
+// 历史背景：早期版本曾在这里维护“跨链路通用 multipart 上传流程”，
+// 现在那部分已下沉到各链路的 IMultipartFlow / IMultipartSession，
+// 本类不再承担任何 multipart 协议实现，仅做路由分发。
 class UploadCoordinator {
  public:
   explicit UploadCoordinator(ClientCore& core);

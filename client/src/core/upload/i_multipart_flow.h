@@ -10,10 +10,23 @@
 
 namespace us3_turbo_access::client {
 
-// 一次 multipart 上传的会话视角。Start 之后，descriptor / upload_id /
-// max_part_size 全部由 session 内部保有，调用方只需要给 part 级变量。
-// 每条链路（HTTP / RDMA / GDS）有自己的 session 实现，可以在内部保留链路
-// 特有的上下文，而不必与其它链路共享一个统一参数形状。
+// IMultipartSession —— 一次 multipart 上传的“链路会话”视角。
+//
+// 由对应链路的 IMultipartFlow::CreateSession 创建，并由 MultipartUpload
+// 独占持有。会话生命周期内绑定以下上下文，调用方无需再传：
+//   - 目标 ObjectId
+//   - upload_id（链路打开 multipart 后由 gateway 分配）
+//   - max_part_size（gateway 强制上限）
+//   - 各链路特有的内部资源（如 RDMA endpoint 池 / GDS context 等）
+//
+// 调用方在 UploadPart 时只需要给 part 级变量：
+//   - part_number
+//   - object_offset
+//   - checksum_policy（运行期可被 set_checksum_policy 调整）
+//   - buffer
+//
+// 这个接口不再尝试给三条链路提供“统一的 multipart 上传形状”——
+// 三条链路各自实现 session，可以在内部自由演化协议细节。
 class IMultipartSession {
  public:
   struct PartRef {
@@ -43,13 +56,19 @@ class IMultipartSession {
   [[nodiscard]] virtual Result<bool> Abort() = 0;
 };
 
-// Flow 退化为 session 工厂：只负责 Start，把 descriptor 一次性交给 session。
+// IMultipartFlow —— “链路 multipart session 工厂”。
+//
+// 不再承担公共 multipart 流程实现，唯一职责就是接收一个 ObjectDescriptor，
+// 打开链路上的 multipart 会话（control plane RPC + 可能的端点准备），
+// 然后把后续所有 part 级操作交给 IMultipartSession。
+//
+// UploadCoordinator 按 DataPath 选出对应 flow；flow 的生命周期与 Client 绑定。
 class IMultipartFlow {
  public:
   virtual ~IMultipartFlow() = default;
 
   [[nodiscard]] virtual Result<std::unique_ptr<IMultipartSession>>
-    Start(const ObjectDescriptor& desc) = 0;
+    CreateSession(const ObjectDescriptor& desc) = 0;
 };
 
 }  // namespace us3_turbo_access::client

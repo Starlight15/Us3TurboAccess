@@ -62,7 +62,7 @@ HttpMultipartFlow::HttpMultipartFlow(HttpDataClient& data_client,
     : data_client_(data_client), transfer_path_(transfer_path) {}
 
 Result<std::unique_ptr<IMultipartSession>>
-HttpMultipartFlow::Start(const ObjectDescriptor& desc) {
+HttpMultipartFlow::CreateSession(const ObjectDescriptor& desc) {
   auto out = data_client_.StartUpload(
       desc.object,
       static_cast<std::uint64_t>(desc.expected_total_size.value_or(0)),
