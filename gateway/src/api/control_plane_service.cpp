@@ -65,6 +65,43 @@ void FillOpenSessionResponse(
 
 }  // namespace
 
+// ---------------------------------------------------------------------------
+
+Result<std::shared_ptr<core::Session>>
+ControlPlaneService::PrepareGdsChunk(
+    brpc::Controller* cntl,
+    const ::us3_turbo_access::gateway::GdsChunkRequest* request,
+    const char* operation_name) {
+  auto& fail_metric = (std::string_view(operation_name) == "gds_get")
+      ? common::metrics().gds_get_fail_total
+      : common::metrics().gds_put_fail_total;
+
+  if (gds_executor_ == nullptr || !gds_executor_->available()) {
+    fail_metric << 1;
+    cntl->SetFailed("gds-cuobject service is not available on gateway");
+    return Result<std::shared_ptr<core::Session>>::Failure(
+        MakeError(ErrorCode::kInternal, "gds-cuobject service is not available on gateway"));
+  }
+  auto session = session_app_.ResolveForGdsChunk(
+      request->session_id(), request->transfer_ticket());
+  if (session == nullptr) {
+    fail_metric << 1;
+    cntl->SetFailed("gds-cuobject session not found");
+    return Result<std::shared_ptr<core::Session>>::Failure(
+        MakeError(ErrorCode::kNotFound, "gds-cuobject session not found"));
+  }
+  if (request->rdma_token().empty()) {
+    fail_metric << 1;
+    cntl->SetFailed("missing rdma token for gds-cuobject request");
+    return Result<std::shared_ptr<core::Session>>::Failure(
+        MakeError(ErrorCode::kInvalidArgument, "missing rdma token for gds-cuobject request"));
+  }
+  session_app_.BumpActive(session->session_id);
+  return Result<std::shared_ptr<core::Session>>::Success(std::move(session));
+}
+
+// ---------------------------------------------------------------------------
+
 ControlPlaneService::ControlPlaneService(core::SessionAppService& session_app,
                                          core::MetadataService& metadata,
                                          core::SessionOpener& session_opener,
@@ -153,24 +190,10 @@ void ControlPlaneService::HandleGdsGet(
   brpc::ClosureGuard done_guard(done);
   common::ScopedLatency latency(common::metrics().gds_get_latency_us);
 
-  if (gds_executor_ == nullptr || !gds_executor_->available()) {
-    common::metrics().gds_get_fail_total << 1;
-    cntl->SetFailed("gds-cuobject service is not available on gateway");
-    return;
-  }
-  auto session = session_app_.ResolveForGdsChunk(
-      request->session_id(), request->transfer_ticket());
-  if (session == nullptr) {
-    common::metrics().gds_get_fail_total << 1;
-    cntl->SetFailed("gds-cuobject session not found");
-    return;
-  }
-  if (request->rdma_token().empty()) {
-    common::metrics().gds_get_fail_total << 1;
-    cntl->SetFailed("missing rdma token for gds-cuobject request");
-    return;
-  }
-  session_app_.BumpActive(session->session_id);
+  auto session_result = PrepareGdsChunk(cntl, request, "gds_get");
+  if (!session_result.success()) return;
+  auto session = session_result.value();
+
   auto head = metadata_.Head(request->bucket(), request->object_key());
   if (!head.success()) {
     common::metrics().gds_get_fail_total << 1;
@@ -214,24 +237,10 @@ void ControlPlaneService::HandleGdsPut(
   brpc::ClosureGuard done_guard(done);
   common::ScopedLatency latency(common::metrics().gds_put_latency_us);
 
-  if (gds_executor_ == nullptr || !gds_executor_->available()) {
-    common::metrics().gds_put_fail_total << 1;
-    cntl->SetFailed("gds-cuobject service is not available on gateway");
-    return;
-  }
-  auto session = session_app_.ResolveForGdsChunk(
-      request->session_id(), request->transfer_ticket());
-  if (session == nullptr) {
-    common::metrics().gds_put_fail_total << 1;
-    cntl->SetFailed("gds-cuobject session not found");
-    return;
-  }
-  if (request->rdma_token().empty()) {
-    common::metrics().gds_put_fail_total << 1;
-    cntl->SetFailed("missing rdma token for gds-cuobject request");
-    return;
-  }
-  session_app_.BumpActive(session->session_id);
+  auto session_result = PrepareGdsChunk(cntl, request, "gds_put");
+  if (!session_result.success()) return;
+  auto session = session_result.value();
+
   // multipart 分支：编排委托给 GdsMultipartPathHandler
   if (!request->upload_id().empty()) {
     if (gds_multipart_handler_ == nullptr) {

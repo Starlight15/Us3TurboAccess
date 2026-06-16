@@ -1,3 +1,0 @@
-round,path,mode,threads,object_size,count,throughput_mbps,lat_p50_ms,lat_p95_ms,lat_p99_ms,cpu_user_s,cpu_sys_s,cpu_pct,wall_s
-1,http,put,4,67108864,32,993.372,249.651,277.179,301.439,0.011818,1.11298,54.558,2.06166
-2,http,put,4,67108864,32,1097.67,231.244,248.327,260.36,0.017199,1.10288,60.033,1.86577

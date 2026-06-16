@@ -8,6 +8,7 @@
 #include <google/protobuf/stubs/callback.h>
 
 #include "control_plane.pb.h"
+#include "us3_turbo_access/gateway/result.h"
 
 namespace spdlog {
 class logger;
@@ -17,6 +18,7 @@ namespace us3_turbo_access::gateway::core {
 class MetadataService;
 class SessionAppService;
 class SessionOpener;
+struct Session;
 }  // namespace us3_turbo_access::gateway::core
 
 namespace us3_turbo_access::gateway::core::multipart {
@@ -126,6 +128,14 @@ class ControlPlaneService final : public ::us3_turbo_access::gateway::ControlPla
       const ::us3_turbo_access::gateway::GdsChunkRequest* request,
       ::us3_turbo_access::gateway::GdsChunkResponse* response,
       google::protobuf::Closure* done);
+
+  /// Common pre-checks for GDS chunk handlers: executor availability,
+  /// session resolution, rdma_token, BumpActive.  On failure, records
+  /// {operation_name}_fail_total and calls cntl->SetFailed().
+  Result<std::shared_ptr<core::Session>> PrepareGdsChunk(
+      brpc::Controller* cntl,
+      const ::us3_turbo_access::gateway::GdsChunkRequest* request,
+      const char* operation_name);
 
   core::SessionAppService&                          session_app_;
   core::MetadataService&                            metadata_;

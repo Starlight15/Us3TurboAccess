@@ -23,7 +23,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(US3_TURBO_ACCESS_BUILD_EXAMPLES "Build Us3TurboAccess examples" ON)
 option(US3_TURBO_ACCESS_USE_SPDLOG_HEADER_ONLY "Use spdlog header-only target" ON)
 
-set(FUSION_ACCESS_DEPS_ROOT "/mnt/n0test/xinghui.shao/gds/FusionAccess/third_party/install"
+set(FUSION_ACCESS_DEPS_ROOT "/mnt/us3_test/ld/FusionAccess/third_party/install"
     CACHE PATH "FusionAccess offline dependency install root")
 set(US3_TURBO_ACCESS_PROTOBUF_ROOT "${FUSION_ACCESS_DEPS_ROOT}/protobuf-25.4-install"
     CACHE PATH "Protobuf static-library install prefix")
