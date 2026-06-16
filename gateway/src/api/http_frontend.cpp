@@ -19,6 +19,7 @@
 #include <nlohmann/json.hpp>
 #include <spdlog/logger.h>
 
+#include "api/conversions.h"
 #include "common/range.h"
 #include "core/metadata/metadata_service.h"
 #include "core/multipart/multipart_app_service.h"
@@ -623,14 +624,7 @@ void HttpFrontend::HandleCompleteUpload(brpc::Controller* cntl,
   std::vector<backend::PartRecord> parts;
   try {
     auto j = nlohmann::json::parse(raw);
-    for (const auto& p : j.at("parts")) {
-      backend::PartRecord r;
-      r.part_number = p.at("part_number").get<std::uint32_t>();
-      r.etag        = p.at("etag").get<std::string>();
-      // offset/size：CompleteUpload 服务端用 RegisterPart 已经登记过 size，
-      // 这里只校验 part_number + etag 一致即可，offset/size 留 0 让后端按记录值算。
-      parts.push_back(std::move(r));
-    }
+    parts = ToPartRecords(j.at("parts"));
   } catch (const std::exception& e) {
     WriteError(cntl, gateway_id_, common::MakeError(
         ErrorCode::kBadRequest,

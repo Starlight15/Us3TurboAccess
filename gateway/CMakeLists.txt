@@ -5,6 +5,7 @@ add_executable(us3_turbo_access_gateway
   src/app/main.cpp
   src/app/server.cpp
   src/api/control_plane_service.cpp
+  src/api/conversions.cpp
   src/api/http_frontend.cpp
   src/api/rdma_data_plane_service.cpp
   src/backend/backend.cpp

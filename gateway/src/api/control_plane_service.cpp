@@ -6,6 +6,7 @@
 #include <brpc/closure_guard.h>
 #include <spdlog/logger.h>
 
+#include "api/conversions.h"
 #include "common/metrics.h"
 #include "backend/backend.h"
 #include "core/metadata/metadata_service.h"
@@ -290,15 +291,7 @@ void ControlPlaneService::StartUpload(
     google::protobuf::Closure* done) {
   brpc::ClosureGuard done_guard(done);
   auto* cntl = static_cast<brpc::Controller*>(cntl_base);
-  core::multipart::StartUploadParams params;
-  params.bucket          = request->bucket();
-  params.object_key      = request->object_key();
-  if (request->expected_total_size() != 0U) {
-    params.expected_total_size =
-        static_cast<std::size_t>(request->expected_total_size());
-  }
-  params.data_path       = request->data_path();
-  params.idempotency_key = request->idempotency_key();
+  auto params = ToStartUploadParams(*request);
   auto out = multipart_app_.StartUpload(params);
   if (!out.success()) {
     cntl->SetFailed(out.error().message);
@@ -315,14 +308,7 @@ void ControlPlaneService::CompleteUpload(
     google::protobuf::Closure* done) {
   brpc::ClosureGuard done_guard(done);
   auto* cntl = static_cast<brpc::Controller*>(cntl_base);
-  std::vector<backend::PartRecord> parts;
-  parts.reserve(static_cast<std::size_t>(request->parts_size()));
-  for (const auto& p : request->parts()) {
-    backend::PartRecord pr;
-    pr.part_number = p.part_number();
-    pr.etag = p.etag();
-    parts.push_back(std::move(pr));
-  }
+  auto parts = ToPartRecords(request->parts());
   auto meta = multipart_app_.CompleteUpload(request->upload_id(), parts,
                                         request->data_path());
   if (!meta.success()) {
