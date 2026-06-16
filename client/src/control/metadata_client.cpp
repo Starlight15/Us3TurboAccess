@@ -34,7 +34,7 @@ void MetadataClient::Shutdown() {
 bool MetadataClient::initialized() const { return stub_ != nullptr; }
 
 Result<us3_turbo_access::gateway::OpenSessionResponse>
-MetadataClient::OpenTransferSession(const SessionOpening& request) const {
+MetadataClient::RpcOpenTransferSession(const SessionOpening& request) const {
   if (!initialized()) {
     return Result<us3_turbo_access::gateway::OpenSessionResponse>::Failure(
         MakeNotInitialized("Metadata client"));
@@ -118,7 +118,7 @@ static us3_turbo_access::gateway::StartUploadRequest BuildStartUploadRequest(
 }
 
 // 职责：RPC 封装与响应解析；不含业务逻辑。
-Result<StartUploadResult> MetadataClient::RpcStartUpload(
+Result<StartUploadResult> MetadataClient::RpcCreateMultipartUpload(
     const ObjectDescriptor& desc) const {
   if (!initialized()) {
     return Result<StartUploadResult>::Failure(MakeNotInitialized("Metadata client"));
@@ -133,7 +133,7 @@ Result<StartUploadResult> MetadataClient::RpcStartUpload(
   auto req = BuildStartUploadRequest(desc);
   us3_turbo_access::gateway::StartUploadResponse resp;
   stub_->StartUpload(&controller, &req, &resp, nullptr);
-  auto status = CheckRpcFailure(controller, "RpcStartUpload failed", desc.data_path, "");
+  auto status = CheckRpcFailure(controller, "RpcCreateMultipartUpload failed", desc.data_path, "");
   if (!status.success()) {
     return Result<StartUploadResult>::Failure(status.error());
   }
@@ -143,7 +143,7 @@ Result<StartUploadResult> MetadataClient::RpcStartUpload(
   return Result<StartUploadResult>::Success(std::move(out));
 }
 
-Result<CompleteUploadOutcome> MetadataClient::CompleteUpload(
+Result<CompleteUploadOutcome> MetadataClient::RpcCompleteMultipartUpload(
     const std::string& upload_id,
     const std::vector<PartCompletion>& parts,
     DataPath data_path) const {
@@ -180,7 +180,7 @@ Result<CompleteUploadOutcome> MetadataClient::CompleteUpload(
   return Result<CompleteUploadOutcome>::Success(std::move(out));
 }
 
-Result<bool> MetadataClient::AbortUpload(const std::string& upload_id,
+Result<bool> MetadataClient::RpcAbortMultipartUpload(const std::string& upload_id,
                                           DataPath data_path) const {
   if (!initialized()) {
     return Result<bool>::Failure(MakeNotInitialized("Metadata client"));

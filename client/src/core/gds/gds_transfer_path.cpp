@@ -44,7 +44,7 @@ template <typename BufferView>
       .path = DataPath::kGdsCuObject,
   });
 
-  auto open_response = context.metadata_client.OpenTransferSession(open_request);
+  auto open_response = context.metadata_client.RpcOpenTransferSession(open_request);
   if (!open_response.success()) {
     return Result<TransferSession>::Failure(open_response.error());
   }
@@ -249,6 +249,17 @@ Result<TransferOutcome> GdsTransferPath::PutObjectPart(
     }
     return outcome;
   });
+}
+
+Result<TransferOutcome> GdsTransferPath::PutObjectPart(
+    const ObjectDescriptor& desc, ConstBufferView buffer,
+    const std::string& upload_id, std::uint32_t part_number) const {
+  RequestOptions request;
+  request.object          = desc.object;
+  request.offset          = desc.offset.value_or(0);
+  request.checksum_policy = desc.checksum_policy;
+  // length intentionally unset: gateway skips whole-object Reserve on session open
+  return PutObjectPart(request, buffer, upload_id, part_number);
 }
 
 }  // namespace us3_turbo_access::client

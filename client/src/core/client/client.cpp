@@ -8,7 +8,6 @@
 
 #include <cuda_runtime.h>
 
-#include "client/src/control/metadata_client.h"
 #include "client/src/core/async/client_executor.h"
 #include "client/src/core/client/client_core.h"
 #include "client/src/core/common/errors.h"
@@ -26,19 +25,18 @@
 
 namespace us3_turbo_access::client {
 
-// MultipartUpload::Impl 只持有一次 multipart 会话的可变状态（upload_id、parts
-// 列表、bytes_committed、finished 标志）。它不感知 HTTP / RDMA / GDS 路径差异；
-// 路径差异统一下沉到 UploadCoordinator，由其按 data_path 路由到对应控制面和数据面。
+// MultipartUpload::Impl 持有一次 multipart 会话的可变状态。
+// flow 指向 UploadCoordinator 拥有的某个具体 flow，生命周期与 Client 绑定。
 struct MultipartUpload::Impl {
-  ClientCore*        core{nullptr};
-  ObjectDescriptor   descriptor;   // object / data_path / checksum_policy 等上下文
+  IMultipartFlow*    flow{nullptr};  // non-owning, valid for Client lifetime
+  ObjectDescriptor   descriptor;
   std::string        upload_id;
   std::size_t        max_part_size{0};
 
-  std::mutex                  mu;
-  std::vector<PartCompletion> parts;
-  std::size_t                 bytes_committed{0};
-  bool                        finished{false};
+  std::mutex                       mu;
+  std::vector<IMultipartFlow::PartRef> parts;
+  std::size_t                      bytes_committed{0};
+  bool                             finished{false};
 };
 
 namespace {
@@ -51,7 +49,7 @@ namespace {
 template <typename ImplT>
 bool ShouldBestEffortAbortOnDestruct(ImplT* impl) {
   if (impl == nullptr) return false;
-  if (impl->upload_id.empty() || impl->core == nullptr) return false;
+  if (impl->upload_id.empty() || impl->flow == nullptr) return false;
   std::scoped_lock lock(impl->mu);
   return !impl->finished;
 }
@@ -65,7 +63,7 @@ bool IsUploadFinished(ImplT& impl) {
 template <typename ImplT>
 void RecordUploadedPart(ImplT& impl, std::uint32_t part_number,
                         std::string etag, std::size_t bytes) {
-  PartCompletion pc;
+  IMultipartFlow::PartRef pc;
   pc.part_number = part_number;
   pc.etag        = std::move(etag);
   std::scoped_lock lock(impl.mu);
@@ -74,13 +72,13 @@ void RecordUploadedPart(ImplT& impl, std::uint32_t part_number,
 }
 
 template <typename ImplT>
-Result<std::vector<PartCompletion>> SnapshotPartsForComplete(ImplT& impl) {
+Result<std::vector<IMultipartFlow::PartRef>> SnapshotPartsForComplete(ImplT& impl) {
   std::scoped_lock lock(impl.mu);
   if (impl.finished) {
-    return Result<std::vector<PartCompletion>>::Failure(
+    return Result<std::vector<IMultipartFlow::PartRef>>::Failure(
         MakeInvalidArgument("multipart upload already finalized"));
   }
-  return Result<std::vector<PartCompletion>>::Success(impl.parts);
+  return Result<std::vector<IMultipartFlow::PartRef>>::Success(impl.parts);
 }
 
 template <typename ImplT>
@@ -96,8 +94,7 @@ MultipartUpload::MultipartUpload(std::unique_ptr<Impl> impl)
 
 MultipartUpload::~MultipartUpload() {
   if (!ShouldBestEffortAbortOnDestruct(impl_.get())) return;
-  (void)impl_->core->upload_coordinator().AbortUpload(
-      impl_->descriptor.data_path, impl_->upload_id);
+  (void)impl_->flow->AbortMultipart(impl_->upload_id);
 }
 
 MultipartUpload::MultipartUpload(MultipartUpload&&) noexcept = default;
@@ -146,7 +143,7 @@ Result<TransferOutcome> MultipartUpload::UploadPart(std::uint32_t part_number,
   ScopedTransferMetric metric(ScopedTransferMetric::Op::kUploadPart,
                                 static_cast<std::int64_t>(buffer.size),
                                 part_desc.data_path);
-  auto outcome = impl_->core->upload_coordinator().UploadPart(
+  auto outcome = impl_->flow->UploadPart(
       part_desc, impl_->upload_id, part_number, buffer);
   if (outcome.success()) metric.MarkSuccess();
   if (!outcome.success()) {
@@ -273,30 +270,13 @@ MultipartUpload::UploadParts(const std::vector<PartSpec>& parts,
   return Result<std::vector<TransferOutcome>>::Success(std::move(outcomes));
 }
 
-namespace {
-
-// 把 client 公开 PartCompletion 适配成 UploadCoordinator 内部类型。
-std::vector<UploadCoordinator::PartRef> ToCoordinatorParts(
-    const std::vector<PartCompletion>& parts) {
-  std::vector<UploadCoordinator::PartRef> out;
-  out.reserve(parts.size());
-  for (const auto& p : parts) {
-    out.push_back({p.part_number, p.etag});
-  }
-  return out;
-}
-
-}  // namespace
-
 Result<CompleteUploadResult> MultipartUpload::Complete() {
   auto snapshot = SnapshotPartsForComplete(*impl_);
   if (!snapshot.success()) {
     return Result<CompleteUploadResult>::Failure(snapshot.error());
   }
 
-  // UploadCoordinator 透明分发：HTTP / GDS / RDMA 各走独立控制面。
-  auto coord_out = impl_->core->upload_coordinator().CompleteUpload(
-      impl_->descriptor.data_path, impl_->upload_id, ToCoordinatorParts(snapshot.value()));
+  auto coord_out = impl_->flow->CompleteMultipart(impl_->upload_id, snapshot.value());
   Result<CompleteUploadResult> result =
       coord_out.success()
           ? Result<CompleteUploadResult>::Success(CompleteUploadResult{
@@ -309,8 +289,7 @@ Result<CompleteUploadResult> MultipartUpload::Complete() {
   // Complete 失败 → best-effort abort 释放 server 端 upload（与 ~MultipartUpload
   // 走同一通道）；但仍把 finished 置 true，避免重复 abort 把用户错误覆盖掉。
   if (!result.success()) {
-    (void)impl_->core->upload_coordinator().AbortUpload(impl_->descriptor.data_path,
-                                                         impl_->upload_id);
+    (void)impl_->flow->AbortMultipart(impl_->upload_id);
   }
   MarkUploadFinished(*impl_);
   return result;
@@ -320,8 +299,7 @@ Result<bool> MultipartUpload::Abort() {
   if (IsUploadFinished(*impl_)) {
     return Result<bool>::Success(true);
   }
-  Result<bool> out = impl_->core->upload_coordinator().AbortUpload(
-      impl_->descriptor.data_path, impl_->upload_id);
+  Result<bool> out = impl_->flow->AbortMultipart(impl_->upload_id);
   MarkUploadFinished(*impl_);
   return out;
 }
@@ -440,16 +418,14 @@ Result<MultipartUpload> Client::StartUpload(const ObjectId& object,
   desc.idempotency_key      = idempotency_key;
 
   auto impl = std::make_unique<MultipartUpload::Impl>();
-  impl->core       = core_.get();
   impl->descriptor = desc;
 
-  // UploadCoordinator 透明分发：HTTP 走 /v1/uploads/{bucket}/{key}（HTTP REST），
-  // GDS/RDMA 走 ControlPlaneService::StartUpload（baidu_std）。
-  // 注意：server 端在 Complete/Abort 强校验 data_path，跨通路调用会被拒绝。
-  auto out = core_->upload_coordinator().RouteStartUpload(desc);
+  auto& flow = core_->upload_coordinator().SelectFlow(desc.data_path);
+  auto out = flow.StartMultipart(desc);
   if (!out.success()) {
     return Result<MultipartUpload>::Failure(out.error());
   }
+  impl->flow          = &flow;
   impl->upload_id     = std::move(out.value().upload_id);
   impl->max_part_size = out.value().max_part_size;
   MultipartUpload upload(std::move(impl));

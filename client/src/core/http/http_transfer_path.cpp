@@ -250,4 +250,15 @@ Result<TransferOutcome> HttpTransferPath::PutObjectPart(
   return Result<TransferOutcome>::Success(std::move(outcome));
 }
 
+Result<TransferOutcome> HttpTransferPath::PutObjectPart(
+    const ObjectDescriptor& desc, ConstBufferView buffer,
+    const std::string& upload_id, std::uint32_t part_number) const {
+  RequestOptions request;
+  request.object          = desc.object;
+  request.offset          = desc.offset.value_or(0);
+  request.checksum_policy = desc.checksum_policy;
+  request.length          = buffer.size;
+  return PutObjectPart(request, buffer, upload_id, part_number);
+}
+
 }  // namespace us3_turbo_access::client

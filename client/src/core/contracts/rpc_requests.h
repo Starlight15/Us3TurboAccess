@@ -24,7 +24,7 @@ struct ObjectRequest {
 };
 
 /**
- * @brief Request payload for MetadataClient::OpenTransferSession.
+ * @brief Request payload for MetadataClient::RpcOpenTransferSession.
  */
 struct SessionOpening {
   RpcCallMetadata context;

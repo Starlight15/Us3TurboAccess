@@ -53,6 +53,12 @@ class HttpTransferPath final : public TransferPath {
                   const std::string& upload_id,
                   std::uint32_t part_number) const;
 
+  // Multipart convenience overload: builds RequestOptions from desc (sets length = buffer.size).
+  [[nodiscard]] Result<TransferOutcome>
+    PutObjectPart(const ObjectDescriptor& desc, ConstBufferView buffer,
+                  const std::string& upload_id,
+                  std::uint32_t part_number) const;
+
  private:
   // GetObject 单连接降级：当 length 小于阈值或 executor 不可用时调。
   [[nodiscard]] Result<TransferOutcome>

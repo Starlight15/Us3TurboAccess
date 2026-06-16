@@ -34,19 +34,19 @@ class MetadataClient {
   void Shutdown();
   [[nodiscard]] bool initialized() const;
 
-  [[nodiscard]] Result<us3_turbo_access::gateway::OpenSessionResponse> OpenTransferSession(
+  [[nodiscard]] Result<us3_turbo_access::gateway::OpenSessionResponse> RpcOpenTransferSession(
       const SessionOpening& request) const;
   [[nodiscard]] Result<ObjectMetadata> HeadObject(const ObjectId& object) const;
 
   [[nodiscard]] Result<StartUploadResult>
-    RpcStartUpload(const ObjectDescriptor& desc) const;
+    RpcCreateMultipartUpload(const ObjectDescriptor& desc) const;
   [[nodiscard]] Result<CompleteUploadOutcome>
-    CompleteUpload(const std::string& upload_id,
-                   const std::vector<PartCompletion>& parts,
-                   DataPath data_path) const;
+    RpcCompleteMultipartUpload(const std::string& upload_id,
+                               const std::vector<PartCompletion>& parts,
+                               DataPath data_path) const;
   [[nodiscard]] Result<bool>
-    AbortUpload(const std::string& upload_id,
-                DataPath data_path) const;
+    RpcAbortMultipartUpload(const std::string& upload_id,
+                            DataPath data_path) const;
 
   /**
    * 通知 server 立即 mark 该 session 为 failed（best-effort）。

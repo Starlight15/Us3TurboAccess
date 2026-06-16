@@ -15,6 +15,9 @@ add_library(us3_turbo_access_client
   src/core/routing/transfer_router.cpp
   src/core/metrics/client_metrics.cpp
   src/core/upload/upload_coordinator.cpp
+  src/core/gds/gds_multipart_flow.cpp
+  src/core/http/http_multipart_flow.cpp
+  src/core/rdma/rdma_multipart_flow.cpp
   src/core/gds/gds_transfer_path.cpp
   src/core/rdma/rdma_transfer_path.cpp
   src/core/http/http_transfer_path.cpp

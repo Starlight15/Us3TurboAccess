@@ -86,7 +86,7 @@ RdmaTransferPath::PrepareAndWrite(const RequestOptions& request,
 
   // 1) OpenSession
   if (!check_deadline()) return timeout_err("OpenSession");
-  auto open_resp = metadata_client_.OpenTransferSession(
+  auto open_resp = metadata_client_.RpcOpenTransferSession(
       MakeSessionHandshake(options_, SessionPlan{
           .operation         = OperationType::kPut,
           .request           = request,
@@ -302,6 +302,17 @@ Result<TransferOutcome> RdmaTransferPath::PutObjectPart(
       request.progress_callback({buffer.size, buffer.size, DataPath::kNativeRdma});
     return Result<TransferOutcome>::Success(std::move(out));
   });
+}
+
+Result<TransferOutcome> RdmaTransferPath::PutObjectPart(
+    const ObjectDescriptor& desc, ConstBufferView buffer,
+    const std::string& upload_id, std::uint32_t part_number) const {
+  RequestOptions request;
+  request.object          = desc.object;
+  request.offset          = desc.offset.value_or(0);
+  request.checksum_policy = desc.checksum_policy;
+  request.length          = buffer.size;  // server BindSession needs to pre-allocate
+  return PutObjectPart(request, buffer, upload_id, part_number);
 }
 
 }  // namespace us3_turbo_access::client
