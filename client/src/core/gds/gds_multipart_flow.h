@@ -17,8 +17,8 @@ class GdsMultipartFlow final : public IMultipartFlow {
  public:
   GdsMultipartFlow(const MetadataClient& metadata, const GdsTransferPath& transfer_path);
 
-  Result<std::unique_ptr<IMultipartSession>>
-    CreateSession(const ObjectDescriptor& desc) override;
+  Status CreateSession(const ObjectDescriptor& desc,
+                       std::unique_ptr<IMultipartSession>* out) override;
 
  private:
   const MetadataClient& metadata_;

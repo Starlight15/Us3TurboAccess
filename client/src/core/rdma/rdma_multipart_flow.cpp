@@ -1,6 +1,7 @@
 #include "client/src/core/rdma/rdma_multipart_flow.h"
 
 #include "client/src/control/metadata_client.h"
+#include "client/src/core/common/errors.h"
 #include "client/src/core/rdma/rdma_transfer_path.h"
 
 namespace us3_turbo_access::client {
@@ -64,16 +65,17 @@ RdmaMultipartFlow::RdmaMultipartFlow(const MetadataClient& metadata,
                                      const RdmaTransferPath& transfer_path)
     : metadata_(metadata), transfer_path_(transfer_path) {}
 
-Result<std::unique_ptr<IMultipartSession>>
-RdmaMultipartFlow::CreateSession(const ObjectDescriptor& desc) {
-  auto out = metadata_.RpcCreateMultipartUpload(desc);
-  if (!out.success()) {
-    return Result<std::unique_ptr<IMultipartSession>>::Failure(out.error());
+Status RdmaMultipartFlow::CreateSession(const ObjectDescriptor& desc,
+                                        std::unique_ptr<IMultipartSession>* out) {
+  if (out == nullptr) {
+    return Status::FromError(MakeInvalidArgument("CreateSession: out is null"));
   }
-  auto session = std::make_unique<RdmaMultipartSession>(
+  auto r = metadata_.RpcCreateMultipartUpload(desc);
+  if (!r.success()) return Status::FromError(r.error());
+  *out = std::make_unique<RdmaMultipartSession>(
       metadata_, transfer_path_, desc.object,
-      std::move(out.value().upload_id), out.value().max_part_size);
-  return Result<std::unique_ptr<IMultipartSession>>::Success(std::move(session));
+      std::move(r.value().upload_id), r.value().max_part_size);
+  return Status::Ok();
 }
 
 }  // namespace us3_turbo_access::client

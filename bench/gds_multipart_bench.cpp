@@ -136,12 +136,12 @@ int main(int argc, char** argv) {
   const std::size_t concurrency = a.threads > 0 ? a.threads : 4;
 
   auto UploadOne = [&](const std::string& key) -> bool {
-    auto start = client.StartUpload(ObjectId{a.bucket, key}, a.object_size);
-    if (!start.success()) {
-      std::cerr << "StartUpload failed: " << start.error().message << std::endl;
+    MultipartUpload upload;
+    if (auto st = client.StartUpload(ObjectId{a.bucket, key}, &upload, a.object_size);
+        !st.ok()) {
+      std::cerr << "StartUpload failed: " << st.error().message << std::endl;
       return false;
     }
-    auto& upload = start.value();
     std::vector<MultipartUpload::PartSpec> specs;
     specs.reserve(num_parts);
     for (std::size_t i = 0; i < num_parts; ++i) {

@@ -90,12 +90,12 @@ bool UploadOneObject(Client& client, const std::string& bucket,
                        const std::string& key, std::size_t object_size,
                        std::size_t part_size, std::size_t concurrency,
                        const std::vector<std::byte>& payload) {
-  auto start = client.StartUpload(ObjectId{bucket, key}, object_size);
-  if (!start.success()) {
-    std::cerr << "StartUpload failed: " << start.error().message << std::endl;
+  MultipartUpload upload;
+  if (auto st = client.StartUpload(ObjectId{bucket, key}, &upload, object_size);
+      !st.ok()) {
+    std::cerr << "StartUpload failed: " << st.error().message << std::endl;
     return false;
   }
-  auto& upload = start.value();
   const std::size_t num_parts = (object_size + part_size - 1) / part_size;
 
   std::vector<MultipartUpload::PartSpec> specs;

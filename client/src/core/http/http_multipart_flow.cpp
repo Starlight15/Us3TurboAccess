@@ -1,5 +1,6 @@
 #include "client/src/core/http/http_multipart_flow.h"
 
+#include "client/src/core/common/errors.h"
 #include "client/src/core/http/http_transfer_path.h"
 #include "client/src/data/http_data_client.h"
 
@@ -61,19 +62,20 @@ HttpMultipartFlow::HttpMultipartFlow(HttpDataClient& data_client,
                                      const HttpTransferPath& transfer_path)
     : data_client_(data_client), transfer_path_(transfer_path) {}
 
-Result<std::unique_ptr<IMultipartSession>>
-HttpMultipartFlow::CreateSession(const ObjectDescriptor& desc) {
-  auto out = data_client_.StartUpload(
+Status HttpMultipartFlow::CreateSession(const ObjectDescriptor& desc,
+                                        std::unique_ptr<IMultipartSession>* out) {
+  if (out == nullptr) {
+    return Status::FromError(MakeInvalidArgument("CreateSession: out is null"));
+  }
+  auto r = data_client_.StartUpload(
       desc.object,
       static_cast<std::uint64_t>(desc.expected_total_size.value_or(0)),
       desc.idempotency_key);
-  if (!out.success()) {
-    return Result<std::unique_ptr<IMultipartSession>>::Failure(out.error());
-  }
-  auto session = std::make_unique<HttpMultipartSession>(
+  if (!r.success()) return Status::FromError(r.error());
+  *out = std::make_unique<HttpMultipartSession>(
       data_client_, transfer_path_, desc.object,
-      std::move(out.value().upload_id), out.value().max_part_size);
-  return Result<std::unique_ptr<IMultipartSession>>::Success(std::move(session));
+      std::move(r.value().upload_id), r.value().max_part_size);
+  return Status::Ok();
 }
 
 }  // namespace us3_turbo_access::client

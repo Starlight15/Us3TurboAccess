@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "us3_turbo_access/client/result.h"
+#include "us3_turbo_access/client/status.h"
 #include "us3_turbo_access/client/types.h"
 
 namespace us3_turbo_access::client {
@@ -67,8 +68,11 @@ class IMultipartFlow {
  public:
   virtual ~IMultipartFlow() = default;
 
-  [[nodiscard]] virtual Result<std::unique_ptr<IMultipartSession>>
-    CreateSession(const ObjectDescriptor& desc) = 0;
+  // 成功时把新创建的 session 写入 *out；失败时 *out 不动，返回带 Error 的 Status。
+  // out 必须非 nullptr，否则返回 kInvalidArgument。
+  [[nodiscard]] virtual Status
+    CreateSession(const ObjectDescriptor& desc,
+                  std::unique_ptr<IMultipartSession>* out) = 0;
 };
 
 }  // namespace us3_turbo_access::client

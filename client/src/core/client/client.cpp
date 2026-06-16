@@ -93,6 +93,8 @@ void MarkUploadFinished(ImplT& impl) {
 
 }  // namespace
 
+MultipartUpload::MultipartUpload() = default;
+
 MultipartUpload::MultipartUpload(std::unique_ptr<Impl> impl)
     : impl_(std::move(impl)) {}
 
@@ -408,11 +410,14 @@ std::future<Result<TransferOutcome>> Client::PutObjectAsync(
 }
 
 // 职责：SDK 对外入口；创建 MultipartUpload handle，填充 impl，路由到 coordinator。
-Result<MultipartUpload> Client::StartUpload(const ObjectId& object,
-                                            std::size_t expected_total_size,
-                                            const std::string& idempotency_key) {
+Status Client::StartUpload(const ObjectId& object, MultipartUpload* out,
+                           std::size_t expected_total_size,
+                           const std::string& idempotency_key) {
+  if (out == nullptr) {
+    return Status::FromError(MakeInvalidArgument("StartUpload: out is null"));
+  }
   if (!core_->initialized()) {
-    return Result<MultipartUpload>::Failure(MakeNotInitialized("Client"));
+    return Status::FromError(MakeNotInitialized("Client"));
   }
   ObjectDescriptor desc;
   desc.object               = object;
@@ -424,13 +429,10 @@ Result<MultipartUpload> Client::StartUpload(const ObjectId& object,
   impl->data_path = desc.data_path;
 
   auto& flow = core_->upload_coordinator().SelectFlow(desc.data_path);
-  auto session_out = flow.CreateSession(desc);
-  if (!session_out.success()) {
-    return Result<MultipartUpload>::Failure(session_out.error());
-  }
-  impl->session = std::move(session_out.value());
-  MultipartUpload upload(std::move(impl));
-  return Result<MultipartUpload>::Success(std::move(upload));
+  if (auto st = flow.CreateSession(desc, &impl->session); !st.ok()) return st;
+
+  *out = MultipartUpload(std::move(impl));
+  return Status::Ok();
 }
 
 Result<bool> Client::RegisterDeviceBuffer(void* ptr, std::size_t size) {

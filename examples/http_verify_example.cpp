@@ -258,9 +258,12 @@ int main(int argc, char** argv) {
         part_payloads[i].data(), part_payloads[i].size()));
   }
 
-  auto start = client.StartUpload(obj_mp, kMultipartSize);
-  EXPECT_OK(start, "StartUpload");
-  auto& upload = start.value();
+  MultipartUpload upload;
+  if (auto st = client.StartUpload(obj_mp, &upload, kMultipartSize); !st.ok()) {
+    std::cerr << "FAIL @" << __LINE__ << ": StartUpload err="
+              << st.error().message << std::endl;
+    return 1;
+  }
   std::cout << "    StartUpload upload_id=" << upload.upload_id()
             << " num_parts=" << num_parts << std::endl;
 

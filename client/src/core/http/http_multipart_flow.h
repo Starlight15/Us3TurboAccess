@@ -16,8 +16,8 @@ class HttpMultipartFlow final : public IMultipartFlow {
  public:
   HttpMultipartFlow(HttpDataClient& data_client, const HttpTransferPath& transfer_path);
 
-  Result<std::unique_ptr<IMultipartSession>>
-    CreateSession(const ObjectDescriptor& desc) override;
+  Status CreateSession(const ObjectDescriptor& desc,
+                       std::unique_ptr<IMultipartSession>* out) override;
 
  private:
   HttpDataClient&         data_client_;

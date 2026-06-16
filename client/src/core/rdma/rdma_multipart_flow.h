@@ -16,8 +16,8 @@ class RdmaMultipartFlow final : public IMultipartFlow {
  public:
   RdmaMultipartFlow(const MetadataClient& metadata, const RdmaTransferPath& transfer_path);
 
-  Result<std::unique_ptr<IMultipartSession>>
-    CreateSession(const ObjectDescriptor& desc) override;
+  Status CreateSession(const ObjectDescriptor& desc,
+                       std::unique_ptr<IMultipartSession>* out) override;
 
  private:
   const MetadataClient&   metadata_;

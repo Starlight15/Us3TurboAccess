@@ -44,13 +44,13 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  auto start = client.StartUpload(ObjectId{.bucket = bucket, .key = object_key},
-                                    total_bytes);
-  if (!start.success()) {
-    std::cerr << "StartUpload failed: " << start.error().message << std::endl;
+  MultipartUpload upload;
+  if (auto st = client.StartUpload(ObjectId{.bucket = bucket, .key = object_key},
+                                   &upload, total_bytes);
+      !st.ok()) {
+    std::cerr << "StartUpload failed: " << st.error().message << std::endl;
     return 1;
   }
-  auto& upload = start.value();
   std::cout << "StartUpload upload_id=" << upload.upload_id()
             << " max_part_size=" << upload.max_part_size()
             << " num_parts=" << num_parts

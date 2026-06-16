@@ -8,6 +8,7 @@
 
 #include "us3_turbo_access/client/options.h"
 #include "us3_turbo_access/client/result.h"
+#include "us3_turbo_access/client/status.h"
 #include "us3_turbo_access/client/types.h"
 
 namespace us3_turbo_access::client {
@@ -43,6 +44,8 @@ struct CompleteUploadResult {
  */
 class MultipartUpload {
  public:
+  // 默认构造产生一个空 handle；在 Client::StartUpload 成功后被 move 填充。
+  MultipartUpload();
   ~MultipartUpload();
   MultipartUpload(const MultipartUpload&) = delete;
   MultipartUpload& operator=(const MultipartUpload&) = delete;
@@ -230,15 +233,17 @@ class Client {
   /**
    * @brief Initiates a multipart upload.
    *
+   * On success, writes the upload handle into @p out.
+   * On failure, @p out is untouched and the returned Status describes the error.
+   *
    * @param object              Destination object.
-   * @param expected_total_size Optional hint for the gateway; pass 0 if
-   *                            unknown. The gateway may use it to allocate
-   *                            backend storage upfront.
-   * @param idempotency_key     Caller-supplied token; identical keys for the
-   *                            same object yield the same upload_id.
+   * @param out                 Non-null pointer to a MultipartUpload to fill.
+   * @param expected_total_size Optional hint for the gateway; pass 0 if unknown.
+   * @param idempotency_key     Caller-supplied token.
    */
-  [[nodiscard]] Result<MultipartUpload>
-    StartUpload(const ObjectId& object, std::size_t expected_total_size = 0,
+  [[nodiscard]] Status
+    StartUpload(const ObjectId& object, MultipartUpload* out,
+                std::size_t expected_total_size = 0,
                 const std::string& idempotency_key = {});
 
   /**
