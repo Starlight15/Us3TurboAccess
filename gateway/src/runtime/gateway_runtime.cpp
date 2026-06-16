@@ -20,6 +20,7 @@
 #include "core/multipart/multipart_app_service.h"
 #include "core/session_opener/session_opener.h"
 #include "core/session/session_store.h"
+#include "core/session/session_app_service.h"
 #include "core/session/session_sweeper.h"
 #include "data_path/gds/gds_executor.h"
 #include "data_path/gds/gds_multipart_path_handler.h"
@@ -78,6 +79,8 @@ Result<bool> GatewayRuntime::Initialize() {
   backend_ = MakeBackend(options_);
   sessions_ = std::make_unique<core::SessionStore>(
       options_.gateway_id, options_.session_ttl, logger_);
+  session_app_ = std::make_unique<core::SessionAppService>(
+      *sessions_, logger_);
   metadata_ = std::make_unique<core::MetadataService>(*backend_);
   multipart_store_ = std::make_unique<core::multipart::MultipartStore>(
       options_.multipart_ttl);
@@ -128,7 +131,7 @@ Result<bool> GatewayRuntime::Initialize() {
       ucx_executor_.get(), logger_);
 
   control_plane_ = std::make_unique<api::ControlPlaneService>(
-      *sessions_, *metadata_, *session_opener_, gds_executor_.get(),
+      *session_app_, *metadata_, *session_opener_, gds_executor_.get(),
       gds_multipart_handler_.get(),
       *multipart_app_, *io_pool_, logger_);
   http_frontend_ = std::make_unique<api::HttpFrontend>(
@@ -229,6 +232,7 @@ void GatewayRuntime::Shutdown() {
   multipart_coordinator_.reset();
   multipart_store_.reset();
   metadata_.reset();
+  session_app_.reset();
   sessions_.reset();
   backend_.reset();
 }

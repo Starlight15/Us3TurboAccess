@@ -15,8 +15,8 @@ class logger;
 
 namespace us3_turbo_access::gateway::core {
 class MetadataService;
+class SessionAppService;
 class SessionOpener;
-class SessionStore;
 }  // namespace us3_turbo_access::gateway::core
 
 namespace us3_turbo_access::gateway::core::multipart {
@@ -35,17 +35,23 @@ class IoWorkerPool;
 namespace us3_turbo_access::gateway::api {
 
 /**
- * @brief brpc adapter that wires the gateway control-plane proto onto the
- *        core session_opener and the GDS executor.
+ * @brief brpc adapter that wires the gateway control-plane proto onto
+ *        application services and data-path executors.
  *
  * This class only translates between protobuf messages (package
- * `us3_turbo_access.gateway`) and core types — all session / data-path
- * business logic lives in @ref core::SessionOpener and
- * @ref data_path::gds::GdsExecutor.
+ * `us3_turbo_access.gateway`) and core types — all session lifecycle,
+ * multipart orchestration, and data-path logic lives in dedicated
+ * service/handler classes:
+ *
+ *   - Session lifecycle    → @ref core::SessionAppService
+ *   - Multipart control    → @ref core::multipart::MultipartAppService
+ *   - GDS multipart part   → @ref data_path::gds::GdsMultipartPathHandler
+ *   - Session opening      → @ref core::SessionOpener
+ *   - GDS data path        → @ref data_path::gds::GdsExecutor
  */
 class ControlPlaneService final : public ::us3_turbo_access::gateway::ControlPlaneService {
  public:
-  ControlPlaneService(core::SessionStore& sessions,
+  ControlPlaneService(core::SessionAppService& session_app,
                       core::MetadataService& metadata,
                       core::SessionOpener& session_opener,
                       data_path::gds::GdsExecutor* gds_executor,
@@ -103,7 +109,6 @@ class ControlPlaneService final : public ::us3_turbo_access::gateway::ControlPla
 
  private:
   // 在 io_pool worker 线程上执行的 RPC handler 实现。
-  // OpenSession/GdsGet/GdsPut 的入口把闭包提交进 io_pool；这里是真正干活的函数。
   void HandleOpenSession(
       brpc::Controller* cntl,
       const ::us3_turbo_access::gateway::OpenSessionRequest* request,
@@ -122,14 +127,14 @@ class ControlPlaneService final : public ::us3_turbo_access::gateway::ControlPla
       ::us3_turbo_access::gateway::GdsChunkResponse* response,
       google::protobuf::Closure* done);
 
-  core::SessionStore&                                  sessions_;
-  core::MetadataService&                               metadata_;
-  core::SessionOpener&                                 session_opener_;
-  data_path::gds::GdsExecutor*                         gds_executor_{nullptr};
-  data_path::gds::GdsMultipartPathHandler*             gds_multipart_handler_{nullptr};
-  core::multipart::MultipartAppService&                multipart_app_;
-  runtime::IoWorkerPool&                               io_pool_;
-  std::shared_ptr<spdlog::logger>                      logger_;
+  core::SessionAppService&                          session_app_;
+  core::MetadataService&                            metadata_;
+  core::SessionOpener&                              session_opener_;
+  data_path::gds::GdsExecutor*                      gds_executor_{nullptr};
+  data_path::gds::GdsMultipartPathHandler*          gds_multipart_handler_{nullptr};
+  core::multipart::MultipartAppService&             multipart_app_;
+  runtime::IoWorkerPool&                            io_pool_;
+  std::shared_ptr<spdlog::logger>                   logger_;
 };
 
 }  // namespace us3_turbo_access::gateway::api

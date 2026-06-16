@@ -32,7 +32,8 @@ namespace us3_turbo_access::gateway::data_path::http {
  *
  * This class is HTTP-only — it does not attempt to abstract a generic
  * multipart handler for GDS or UCX. Those paths remain independently
- * managed in their respective executors.
+ * managed in their respective path handlers (GdsMultipartPathHandler,
+ * UcxMultipartPathHandler).
  */
 class HttpMultipartPathHandler final {
  public:

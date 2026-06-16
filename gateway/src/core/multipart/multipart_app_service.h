@@ -21,16 +21,16 @@ namespace us3_turbo_access::gateway::core::multipart {
  * This class is the single entry point for StartUpload / CompleteUpload /
  * AbortUpload across all API surfaces (baidu_std RPC, HTTP, etc.).
  *
- * Why this layer exists (round 1):
+ * Why this layer exists:
  *   Previously, ControlPlaneService and HttpFrontend each called
  *   MultipartCoordinator directly, which meant the API layer was doing
  *   both protocol adaptation *and* business orchestration.
  *   MultipartAppService absorbs the orchestration concern so that API
  *   handlers remain pure protocol adapters (decode → call → encode).
  *
- * What this layer does NOT do (round 1):
- *   - UploadPart — left in the data-path executors; will be pulled in
- *     a future round.
+ * What this layer does NOT do:
+ *   - UploadPart — handled by per-path handlers (HttpMultipartPathHandler,
+ *     GdsMultipartPathHandler, UcxMultipartPathHandler).
  *   - GDS token / UCX write_done / HTTP body — these are data-plane
  *     concerns that stay in their respective executors.
  */

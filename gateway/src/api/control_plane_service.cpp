@@ -10,8 +10,8 @@
 #include "backend/backend.h"
 #include "core/metadata/metadata_service.h"
 #include "core/multipart/multipart_app_service.h"
+#include "core/session/session_app_service.h"
 #include "core/session_opener/session_opener.h"
-#include "core/session/session_store.h"
 #include "data_path/gds/gds_executor.h"
 #include "data_path/gds/gds_multipart_path_handler.h"
 #include "runtime/io_worker_pool.h"
@@ -20,24 +20,6 @@
 namespace us3_turbo_access::gateway::api {
 
 namespace {
-
-[[nodiscard]] std::shared_ptr<core::Session> ResolveSession(
-    core::SessionStore& sessions,
-    const ::us3_turbo_access::gateway::GdsChunkRequest& request) {
-  if (!request.session_id().empty()) {
-    auto lookup = sessions.Find(request.session_id());
-    if (lookup.success()) {
-      return lookup.value();
-    }
-  }
-  if (!request.transfer_ticket().empty()) {
-    auto lookup = sessions.FindByTicket(request.transfer_ticket());
-    if (lookup.success()) {
-      return lookup.value();
-    }
-  }
-  return nullptr;
-}
 
 void FillGdsResponse(const std::string& gateway_id,
                      const std::string& transfer_status,
@@ -83,7 +65,7 @@ void FillOpenSessionResponse(
 
 }  // namespace
 
-ControlPlaneService::ControlPlaneService(core::SessionStore& sessions,
+ControlPlaneService::ControlPlaneService(core::SessionAppService& session_app,
                                          core::MetadataService& metadata,
                                          core::SessionOpener& session_opener,
                                          data_path::gds::GdsExecutor* gds_executor,
@@ -91,7 +73,7 @@ ControlPlaneService::ControlPlaneService(core::SessionStore& sessions,
                                          core::multipart::MultipartAppService& multipart_app,
                                          runtime::IoWorkerPool& io_pool,
                                          std::shared_ptr<spdlog::logger> logger)
-    : sessions_(sessions),
+    : session_app_(session_app),
       metadata_(metadata),
       session_opener_(session_opener),
       gds_executor_(gds_executor),
@@ -176,7 +158,8 @@ void ControlPlaneService::HandleGdsGet(
     cntl->SetFailed("gds-cuobject service is not available on gateway");
     return;
   }
-  auto session = ResolveSession(sessions_, *request);
+  auto session = session_app_.ResolveForGdsChunk(
+      request->session_id(), request->transfer_ticket());
   if (session == nullptr) {
     common::metrics().gds_get_fail_total << 1;
     cntl->SetFailed("gds-cuobject session not found");
@@ -187,14 +170,11 @@ void ControlPlaneService::HandleGdsGet(
     cntl->SetFailed("missing rdma token for gds-cuobject request");
     return;
   }
-  // 第一次到达此 session 的 chunk：CAS kOpened→kActive；
-  // 之后的 chunk 是 no-op。BumpActive 不会因状态过期而失败，所以忽略返回值。
-  // 首个 chunk 推进 kOpened→kActive；之后是 no-op。
-  (void)sessions_.BumpActive(session->session_id);
+  session_app_.BumpActive(session->session_id);
   auto head = metadata_.Head(request->bucket(), request->object_key());
   if (!head.success()) {
     common::metrics().gds_get_fail_total << 1;
-    (void)sessions_.MarkFailed(session->session_id);
+    session_app_.MarkFailed(*session);
     cntl->SetFailed(head.error().message);
     return;
   }
@@ -203,7 +183,7 @@ void ControlPlaneService::HandleGdsGet(
                                        request->chunk_size());
   if (!chunk.success()) {
     common::metrics().gds_get_fail_total << 1;
-    (void)sessions_.MarkFailed(session->session_id);
+    session_app_.MarkFailed(*session);
     cntl->SetFailed(chunk.error().message);
     return;
   }
@@ -239,7 +219,8 @@ void ControlPlaneService::HandleGdsPut(
     cntl->SetFailed("gds-cuobject service is not available on gateway");
     return;
   }
-  auto session = ResolveSession(sessions_, *request);
+  auto session = session_app_.ResolveForGdsChunk(
+      request->session_id(), request->transfer_ticket());
   if (session == nullptr) {
     common::metrics().gds_put_fail_total << 1;
     cntl->SetFailed("gds-cuobject session not found");
@@ -250,7 +231,7 @@ void ControlPlaneService::HandleGdsPut(
     cntl->SetFailed("missing rdma token for gds-cuobject request");
     return;
   }
-  (void)sessions_.BumpActive(session->session_id);
+  session_app_.BumpActive(session->session_id);
   // multipart 分支：编排委托给 GdsMultipartPathHandler
   if (!request->upload_id().empty()) {
     if (gds_multipart_handler_ == nullptr) {
@@ -264,7 +245,7 @@ void ControlPlaneService::HandleGdsPut(
         request->chunk_size(), request->checksum_policy());
     if (!result.success()) {
       common::metrics().gds_put_fail_total << 1;
-      (void)sessions_.MarkFailed(session->session_id);
+      session_app_.MarkFailed(*session);
       cntl->SetFailed(result.error().message);
       return;
     }
@@ -281,7 +262,7 @@ void ControlPlaneService::HandleGdsPut(
                                          request->chunk_size());
   if (!written.success()) {
     common::metrics().gds_put_fail_total << 1;
-    (void)sessions_.MarkFailed(session->session_id);
+    session_app_.MarkFailed(*session);
     cntl->SetFailed(written.error().message);
     return;
   }
@@ -359,9 +340,6 @@ void ControlPlaneService::AbortUpload(
   }
 }
 
-// 通知 server 把 session 标记 failed，触发 sweeper 提前回收（无需等 TTL）。
-// 用于 client 重试 OpenSession 前清理上一次失败的 session，避免 server 端
-// session 积压。不存在的 session 视为 no-op，返回 erased=false。
 void ControlPlaneService::AbortSession(
     google::protobuf::RpcController* cntl_base,
     const ::us3_turbo_access::gateway::AbortSessionRequest* request,
@@ -369,9 +347,8 @@ void ControlPlaneService::AbortSession(
     google::protobuf::Closure* done) {
   brpc::ClosureGuard done_guard(done);
   (void)cntl_base;  // 不存在的 session 视为 no-op；不让 RPC 失败
-  auto marked = sessions_.MarkFailed(request->session_id());
-  // success 表示找到并 mark；找不到 session 不报错（best-effort）。
-  response->set_erased(marked.success() && marked.value() != nullptr);
+  auto erased = session_app_.MarkFailedById(request->session_id());
+  response->set_erased(erased);
 }
 
 }  // namespace us3_turbo_access::gateway::api

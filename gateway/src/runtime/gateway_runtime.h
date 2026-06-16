@@ -17,6 +17,7 @@ class IBackend;
 
 namespace us3_turbo_access::gateway::core {
 class MetadataService;
+class SessionAppService;
 class SessionOpener;
 class SessionStore;
 class SessionSweeper;
@@ -86,6 +87,7 @@ class GatewayRuntime {
   std::shared_ptr<spdlog::logger>                      logger_;
   std::unique_ptr<backend::IBackend>                   backend_;
   std::unique_ptr<core::SessionStore>                  sessions_;
+  std::unique_ptr<core::SessionAppService>             session_app_;
   std::unique_ptr<core::SessionSweeper>                session_sweeper_;
   std::unique_ptr<core::multipart::MultipartStore>     multipart_store_;
   std::unique_ptr<core::multipart::MultipartCoordinator> multipart_coordinator_;

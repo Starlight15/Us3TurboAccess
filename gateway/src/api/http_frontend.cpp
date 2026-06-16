@@ -548,7 +548,7 @@ void HttpFrontend::HandlePut(brpc::Controller* cntl, const std::string& bucket,
 void HttpFrontend::HandleStartUpload(brpc::Controller* cntl,
                                        const std::string& bucket,
                                        const std::string& key) {
-  // 复用 MultipartCoordinator，与控制面 baidu_std multipart 共用一份后端状态。
+  // 通过 MultipartAppService 发起上传，与控制面 baidu_std multipart 共用同一后端状态。
   core::multipart::StartUploadParams params;
   params.bucket = bucket;
   params.object_key = key;

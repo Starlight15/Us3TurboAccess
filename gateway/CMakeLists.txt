@@ -22,6 +22,7 @@ add_executable(us3_turbo_access_gateway
   src/common/range.cpp
   src/common/types.cpp
   src/core/session/session_store.cpp
+  src/core/session/session_app_service.cpp
   src/core/session/session_sweeper.cpp
   src/core/session_opener/session_opener.cpp
   src/core/multipart/multipart_store.cpp
