@@ -21,11 +21,11 @@ class SessionStore;
 
 namespace us3_turbo_access::gateway::core::multipart {
 class MultipartAppService;
-class MultipartCoordinator;
 }  // namespace us3_turbo_access::gateway::core::multipart
 
 namespace us3_turbo_access::gateway::data_path::gds {
 class GdsExecutor;
+class GdsMultipartPathHandler;
 }  // namespace us3_turbo_access::gateway::data_path::gds
 
 namespace us3_turbo_access::gateway::runtime {
@@ -49,8 +49,8 @@ class ControlPlaneService final : public ::us3_turbo_access::gateway::ControlPla
                       core::MetadataService& metadata,
                       core::SessionOpener& session_opener,
                       data_path::gds::GdsExecutor* gds_executor,
+                      data_path::gds::GdsMultipartPathHandler* gds_multipart_handler,
                       core::multipart::MultipartAppService& multipart_app,
-                      core::multipart::MultipartCoordinator& multipart_coord,
                       runtime::IoWorkerPool& io_pool,
                       std::shared_ptr<spdlog::logger> logger);
 
@@ -122,14 +122,14 @@ class ControlPlaneService final : public ::us3_turbo_access::gateway::ControlPla
       ::us3_turbo_access::gateway::GdsChunkResponse* response,
       google::protobuf::Closure* done);
 
-  core::SessionStore&              sessions_;
-  core::MetadataService&           metadata_;
-  core::SessionOpener&             session_opener_;
-  data_path::gds::GdsExecutor*     gds_executor_{nullptr};
-  core::multipart::MultipartAppService&   multipart_app_;
-  core::multipart::MultipartCoordinator&  multipart_coord_;
-  runtime::IoWorkerPool&           io_pool_;
-  std::shared_ptr<spdlog::logger>  logger_;
+  core::SessionStore&                                  sessions_;
+  core::MetadataService&                               metadata_;
+  core::SessionOpener&                                 session_opener_;
+  data_path::gds::GdsExecutor*                         gds_executor_{nullptr};
+  data_path::gds::GdsMultipartPathHandler*             gds_multipart_handler_{nullptr};
+  core::multipart::MultipartAppService&                multipart_app_;
+  runtime::IoWorkerPool&                               io_pool_;
+  std::shared_ptr<spdlog::logger>                      logger_;
 };
 
 }  // namespace us3_turbo_access::gateway::api

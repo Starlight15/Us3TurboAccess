@@ -10,10 +10,10 @@
 #include "backend/backend.h"
 #include "core/metadata/metadata_service.h"
 #include "core/multipart/multipart_app_service.h"
-#include "core/multipart/multipart_coordinator.h"
 #include "core/session_opener/session_opener.h"
 #include "core/session/session_store.h"
 #include "data_path/gds/gds_executor.h"
+#include "data_path/gds/gds_multipart_path_handler.h"
 #include "runtime/io_worker_pool.h"
 #include "us3_turbo_access/gateway/types.h"
 
@@ -87,16 +87,16 @@ ControlPlaneService::ControlPlaneService(core::SessionStore& sessions,
                                          core::MetadataService& metadata,
                                          core::SessionOpener& session_opener,
                                          data_path::gds::GdsExecutor* gds_executor,
+                                         data_path::gds::GdsMultipartPathHandler* gds_multipart_handler,
                                          core::multipart::MultipartAppService& multipart_app,
-                                         core::multipart::MultipartCoordinator& multipart_coord,
                                          runtime::IoWorkerPool& io_pool,
                                          std::shared_ptr<spdlog::logger> logger)
     : sessions_(sessions),
       metadata_(metadata),
       session_opener_(session_opener),
       gds_executor_(gds_executor),
+      gds_multipart_handler_(gds_multipart_handler),
       multipart_app_(multipart_app),
-      multipart_coord_(multipart_coord),
       io_pool_(io_pool),
       logger_(std::move(logger)) {}
 
@@ -251,34 +251,28 @@ void ControlPlaneService::HandleGdsPut(
     return;
   }
   (void)sessions_.BumpActive(session->session_id);
-  // multipart 分支
+  // multipart 分支：编排委托给 GdsMultipartPathHandler
   if (!request->upload_id().empty()) {
-    auto lookup = multipart_coord_.Lookup(request->upload_id());
-    if (!lookup.success()) {
+    if (gds_multipart_handler_ == nullptr) {
       common::metrics().gds_put_fail_total << 1;
-      (void)sessions_.MarkFailed(session->session_id);
-      cntl->SetFailed(lookup.error().message);
+      cntl->SetFailed("gds multipart handler not available");
       return;
     }
-    auto upload = lookup.value();
-    auto part_etag = gds_executor_->PutPart(
-        *session, request->rdma_token(), upload->backend_upload_id,
+    auto result = gds_multipart_handler_->UploadPart(
+        *session, request->rdma_token(), request->upload_id(),
         request->part_number(), request->chunk_offset(),
         request->chunk_size(), request->checksum_policy());
-    if (!part_etag.success()) {
+    if (!result.success()) {
       common::metrics().gds_put_fail_total << 1;
       (void)sessions_.MarkFailed(session->session_id);
-      cntl->SetFailed(part_etag.error().message);
+      cntl->SetFailed(result.error().message);
       return;
     }
-    // 登记 part 进度，供 CompleteUpload 校验。
-    multipart_coord_.RegisterPart(*upload, request->part_number(),
-                            request->chunk_offset(), request->chunk_size(),
-                            part_etag.value());
     common::metrics().gds_put_total << 1;
     common::metrics().gds_put_bytes << static_cast<std::int64_t>(request->chunk_size());
-    FillGdsResponse(session->gateway_id, "completed", "gds-cuobject-rdma-read",
-                    part_etag.value(), /*version=*/"", /*crc32c=*/0, response);
+    FillGdsResponse(session->gateway_id, "completed",
+                    result.value().rdma_reply, result.value().part_etag,
+                    /*version=*/"", result.value().crc32c, response);
     return;
   }
   // 单对象分支

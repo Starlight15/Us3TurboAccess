@@ -30,6 +30,7 @@ class MultipartAppService;
 
 namespace us3_turbo_access::gateway::data_path::gds {
 class GdsExecutor;
+class GdsMultipartPathHandler;
 }  // namespace us3_turbo_access::gateway::data_path::gds
 
 namespace us3_turbo_access::gateway::data_path::ucx {
@@ -93,7 +94,8 @@ class GatewayRuntime {
   std::unique_ptr<data_path::http::HttpExecutor>             http_executor_;
   std::unique_ptr<data_path::http::HttpMultipartPathHandler> http_multipart_handler_;
   std::unique_ptr<core::SessionOpener>                 session_opener_;
-  std::unique_ptr<data_path::gds::GdsExecutor>         gds_executor_;
+  std::unique_ptr<data_path::gds::GdsExecutor>               gds_executor_;
+  std::unique_ptr<data_path::gds::GdsMultipartPathHandler>   gds_multipart_handler_;
   std::unique_ptr<data_path::ucx::UcxExecutor>         ucx_executor_;
   std::unique_ptr<api::ControlPlaneService>            control_plane_;
   std::unique_ptr<api::RdmaDataPlaneService>           rdma_data_plane_;

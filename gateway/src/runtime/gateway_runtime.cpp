@@ -22,6 +22,7 @@
 #include "core/session/session_store.h"
 #include "core/session/session_sweeper.h"
 #include "data_path/gds/gds_executor.h"
+#include "data_path/gds/gds_multipart_path_handler.h"
 #include "data_path/ucx/ucx_executor.h"
 #include "runtime/io_worker_pool.h"
 #include "data_path/http/http_executor.h"
@@ -102,6 +103,8 @@ Result<bool> GatewayRuntime::Initialize() {
     if (!started.success()) {
       return Result<bool>::Failure(started.error());
     }
+    gds_multipart_handler_ = std::make_unique<data_path::gds::GdsMultipartPathHandler>(
+        *gds_executor_, *multipart_coordinator_, logger_);
   }
 
   // UCX 数据通路（kNativeRdma DataPath）。
@@ -123,7 +126,8 @@ Result<bool> GatewayRuntime::Initialize() {
 
   control_plane_ = std::make_unique<api::ControlPlaneService>(
       *sessions_, *metadata_, *session_opener_, gds_executor_.get(),
-      *multipart_app_, *multipart_coordinator_, *io_pool_, logger_);
+      gds_multipart_handler_.get(),
+      *multipart_app_, *io_pool_, logger_);
   http_frontend_ = std::make_unique<api::HttpFrontend>(
       options_.gateway_id, *metadata_, *http_executor_,
       *http_multipart_handler_, *multipart_app_, options_.http_max_put_bytes, logger_);
@@ -200,6 +204,7 @@ void GatewayRuntime::Shutdown() {
   rdma_data_plane_.reset();
   http_frontend_.reset();  // typically already released to brpc; safe no-op.
   session_opener_.reset();
+  gds_multipart_handler_.reset();
   if (gds_executor_ != nullptr) {
     gds_executor_->Stop();
   }
