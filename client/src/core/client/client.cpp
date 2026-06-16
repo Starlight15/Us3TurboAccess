@@ -26,17 +26,21 @@
 namespace us3_turbo_access::client {
 
 // MultipartUpload::Impl 持有一次 multipart 会话的可变状态。
-// flow 指向 UploadCoordinator 拥有的某个具体 flow，生命周期与 Client 绑定。
+// session 由对应链路的 IMultipartFlow::Start 创建并独占持有；upload_id、
+// max_part_size 等 multipart 协议字段全部内化到 session 中，Impl 不再
+// 显式保存。Impl 只保留：
+//   - 会话级可变状态：checksum_policy（由 set_checksum_policy 写入）
+//   - 指标透传：data_path
+//   - 并发协调：mu / parts / bytes_committed / finished
 struct MultipartUpload::Impl {
-  IMultipartFlow*    flow{nullptr};  // non-owning, valid for Client lifetime
-  ObjectDescriptor   descriptor;
-  std::string        upload_id;
-  std::size_t        max_part_size{0};
+  std::unique_ptr<IMultipartSession> session;
+  std::string        checksum_policy{"none"};
+  DataPath           data_path{DataPath::kGdsCuObject};
 
-  std::mutex                       mu;
-  std::vector<IMultipartFlow::PartRef> parts;
-  std::size_t                      bytes_committed{0};
-  bool                             finished{false};
+  std::mutex                              mu;
+  std::vector<IMultipartSession::PartRef> parts;
+  std::size_t                             bytes_committed{0};
+  bool                                    finished{false};
 };
 
 namespace {
@@ -49,7 +53,7 @@ namespace {
 template <typename ImplT>
 bool ShouldBestEffortAbortOnDestruct(ImplT* impl) {
   if (impl == nullptr) return false;
-  if (impl->upload_id.empty() || impl->flow == nullptr) return false;
+  if (impl->session == nullptr) return false;
   std::scoped_lock lock(impl->mu);
   return !impl->finished;
 }
@@ -63,7 +67,7 @@ bool IsUploadFinished(ImplT& impl) {
 template <typename ImplT>
 void RecordUploadedPart(ImplT& impl, std::uint32_t part_number,
                         std::string etag, std::size_t bytes) {
-  IMultipartFlow::PartRef pc;
+  IMultipartSession::PartRef pc;
   pc.part_number = part_number;
   pc.etag        = std::move(etag);
   std::scoped_lock lock(impl.mu);
@@ -72,13 +76,13 @@ void RecordUploadedPart(ImplT& impl, std::uint32_t part_number,
 }
 
 template <typename ImplT>
-Result<std::vector<IMultipartFlow::PartRef>> SnapshotPartsForComplete(ImplT& impl) {
+Result<std::vector<IMultipartSession::PartRef>> SnapshotPartsForComplete(ImplT& impl) {
   std::scoped_lock lock(impl.mu);
   if (impl.finished) {
-    return Result<std::vector<IMultipartFlow::PartRef>>::Failure(
+    return Result<std::vector<IMultipartSession::PartRef>>::Failure(
         MakeInvalidArgument("multipart upload already finalized"));
   }
-  return Result<std::vector<IMultipartFlow::PartRef>>::Success(impl.parts);
+  return Result<std::vector<IMultipartSession::PartRef>>::Success(impl.parts);
 }
 
 template <typename ImplT>
@@ -94,23 +98,23 @@ MultipartUpload::MultipartUpload(std::unique_ptr<Impl> impl)
 
 MultipartUpload::~MultipartUpload() {
   if (!ShouldBestEffortAbortOnDestruct(impl_.get())) return;
-  (void)impl_->flow->AbortMultipart(impl_->upload_id);
+  (void)impl_->session->Abort();
 }
 
 MultipartUpload::MultipartUpload(MultipartUpload&&) noexcept = default;
 MultipartUpload& MultipartUpload::operator=(MultipartUpload&&) noexcept = default;
 
 const std::string& MultipartUpload::upload_id() const noexcept {
-  return impl_->upload_id;
+  return impl_->session->upload_id();
 }
 
 std::size_t MultipartUpload::max_part_size() const noexcept {
-  return impl_->max_part_size;
+  return impl_->session->max_part_size();
 }
 
 void MultipartUpload::set_checksum_policy(std::string policy) {
   std::scoped_lock lock(impl_->mu);
-  impl_->descriptor.checksum_policy = std::move(policy);
+  impl_->checksum_policy = std::move(policy);
 }
 
 // 上传单个 part：开 session → 走 path 对应数据面 → 记录 (part_number, etag)。
@@ -121,30 +125,29 @@ Result<TransferOutcome> MultipartUpload::UploadPart(std::uint32_t part_number,
     return Result<TransferOutcome>::Failure(
         MakeInvalidArgument("UploadPart buffer is empty"));
   }
-  if (impl_->max_part_size != 0 && buffer.size > impl_->max_part_size) {
+  if (impl_->session->max_part_size() != 0 &&
+      buffer.size > impl_->session->max_part_size()) {
     return Result<TransferOutcome>::Failure(
         MakeInvalidArgument("part exceeds gateway max_part_size"));
   }
 
-  // 在同一个锁区间内完成 finished 检查 + descriptor 快照，消除
+  // 在同一个锁区间内完成 finished 检查 + checksum_policy 快照，消除
   // set_checksum_policy 与无锁 copy 之间的数据竞争。
-  ObjectDescriptor part_desc;
+  std::string checksum_policy;
   {
     std::scoped_lock lock(impl_->mu);
     if (impl_->finished) {
       return Result<TransferOutcome>::Failure(
           MakeInvalidArgument("multipart upload already finalized"));
     }
-    part_desc = impl_->descriptor;
+    checksum_policy = impl_->checksum_policy;
   }
-  // 锁外补充本次 part 专有字段，不修改共享 descriptor。
-  part_desc.offset = object_offset;
 
   ScopedTransferMetric metric(ScopedTransferMetric::Op::kUploadPart,
                                 static_cast<std::int64_t>(buffer.size),
-                                part_desc.data_path);
-  auto outcome = impl_->flow->UploadPart(
-      part_desc, impl_->upload_id, part_number, buffer);
+                                impl_->data_path);
+  auto outcome = impl_->session->UploadPart(
+      part_number, object_offset, checksum_policy, buffer);
   if (outcome.success()) metric.MarkSuccess();
   if (!outcome.success()) {
     return outcome;
@@ -276,7 +279,7 @@ Result<CompleteUploadResult> MultipartUpload::Complete() {
     return Result<CompleteUploadResult>::Failure(snapshot.error());
   }
 
-  auto coord_out = impl_->flow->CompleteMultipart(impl_->upload_id, snapshot.value());
+  auto coord_out = impl_->session->Complete(snapshot.value());
   Result<CompleteUploadResult> result =
       coord_out.success()
           ? Result<CompleteUploadResult>::Success(CompleteUploadResult{
@@ -289,7 +292,7 @@ Result<CompleteUploadResult> MultipartUpload::Complete() {
   // Complete 失败 → best-effort abort 释放 server 端 upload（与 ~MultipartUpload
   // 走同一通道）；但仍把 finished 置 true，避免重复 abort 把用户错误覆盖掉。
   if (!result.success()) {
-    (void)impl_->flow->AbortMultipart(impl_->upload_id);
+    (void)impl_->session->Abort();
   }
   MarkUploadFinished(*impl_);
   return result;
@@ -299,7 +302,7 @@ Result<bool> MultipartUpload::Abort() {
   if (IsUploadFinished(*impl_)) {
     return Result<bool>::Success(true);
   }
-  Result<bool> out = impl_->flow->AbortMultipart(impl_->upload_id);
+  Result<bool> out = impl_->session->Abort();
   MarkUploadFinished(*impl_);
   return out;
 }
@@ -418,16 +421,14 @@ Result<MultipartUpload> Client::StartUpload(const ObjectId& object,
   desc.idempotency_key      = idempotency_key;
 
   auto impl = std::make_unique<MultipartUpload::Impl>();
-  impl->descriptor = desc;
+  impl->data_path = desc.data_path;
 
   auto& flow = core_->upload_coordinator().SelectFlow(desc.data_path);
-  auto out = flow.StartMultipart(desc);
-  if (!out.success()) {
-    return Result<MultipartUpload>::Failure(out.error());
+  auto session_out = flow.Start(desc);
+  if (!session_out.success()) {
+    return Result<MultipartUpload>::Failure(session_out.error());
   }
-  impl->flow          = &flow;
-  impl->upload_id     = std::move(out.value().upload_id);
-  impl->max_part_size = out.value().max_part_size;
+  impl->session = std::move(session_out.value());
   MultipartUpload upload(std::move(impl));
   return Result<MultipartUpload>::Success(std::move(upload));
 }

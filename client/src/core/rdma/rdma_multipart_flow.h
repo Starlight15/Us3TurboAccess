@@ -11,14 +11,8 @@ class RdmaMultipartFlow final : public IMultipartFlow {
  public:
   RdmaMultipartFlow(const MetadataClient& metadata, const RdmaTransferPath& transfer_path);
 
-  Result<StartUploadResult> StartMultipart(const ObjectDescriptor& desc) override;
-  Result<TransferOutcome> UploadPart(const ObjectDescriptor& desc,
-                                     const std::string& upload_id,
-                                     std::uint32_t part_number,
-                                     ConstBufferView buffer) override;
-  Result<CompleteResult> CompleteMultipart(const std::string& upload_id,
-                                           const std::vector<PartRef>& parts) override;
-  Result<bool> AbortMultipart(const std::string& upload_id) override;
+  Result<std::unique_ptr<IMultipartSession>>
+    Start(const ObjectDescriptor& desc) override;
 
  private:
   const MetadataClient&   metadata_;
