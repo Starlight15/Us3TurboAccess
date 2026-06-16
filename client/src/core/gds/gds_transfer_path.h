@@ -43,13 +43,6 @@ class GdsTransferPath final : public TransferPath {
                   const std::string& upload_id,
                   std::uint32_t part_number) const;
 
-  // Multipart convenience overload: builds RequestOptions from desc; length is intentionally
-  // left unset so the gateway skips the whole-object Reserve on session open.
-  [[nodiscard]] Result<TransferOutcome>
-    PutObjectPart(const ObjectDescriptor& desc, ConstBufferView buffer,
-                  const std::string& upload_id,
-                  std::uint32_t part_number) const;
-
  private:
   // 单连接降级：length 小 / 并发不够 / executor 未就绪 时走这条路径。
   [[nodiscard]] Result<TransferOutcome>

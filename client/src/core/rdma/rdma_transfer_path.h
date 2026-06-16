@@ -53,12 +53,6 @@ class RdmaTransferPath final : public TransferPath {
     PutObjectPart(const RequestOptions& request, ConstBufferView buffer,
                   const std::string& upload_id, std::uint32_t part_number) const;
 
-  // Multipart convenience overload: builds RequestOptions from desc (sets length = buffer.size
-  // so the server BindSession stage can pre-allocate the receive buffer).
-  [[nodiscard]] Result<TransferOutcome>
-    PutObjectPart(const ObjectDescriptor& desc, ConstBufferView buffer,
-                  const std::string& upload_id, std::uint32_t part_number) const;
-
  private:
   // PrepareAndWrite 返回值：PutAndNotify 完成时 gw_rkey 已在 slot 里；ep 成功时归还 pool
   struct WritePrepared {
