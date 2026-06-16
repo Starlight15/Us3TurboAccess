@@ -23,6 +23,7 @@
 #include "core/metadata/metadata_service.h"
 #include "core/multipart/multipart_app_service.h"
 #include "data_path/http/http_executor.h"
+#include "data_path/http/http_multipart_path_handler.h"
 #include "common/error.h"
 #include "common/metrics.h"
 
@@ -257,12 +258,14 @@ void WriteError(brpc::Controller* cntl, std::string_view gateway_id,
 HttpFrontend::HttpFrontend(std::string gateway_id,
                            core::MetadataService& metadata,
                            data_path::http::HttpExecutor& http,
+                           data_path::http::HttpMultipartPathHandler& multipart_handler,
                            core::multipart::MultipartAppService& multipart,
                            std::size_t max_put_bytes,
                            std::shared_ptr<spdlog::logger> logger)
     : gateway_id_(std::move(gateway_id)),
       metadata_(metadata),
       http_(http),
+      multipart_handler_(multipart_handler),
       multipart_(multipart),
       max_put_bytes_(max_put_bytes),
       logger_(std::move(logger)) {}
@@ -595,7 +598,7 @@ void HttpFrontend::HandleUploadPart(brpc::Controller* cntl,
   // 零拷贝：直接传递 IOBuf
   const auto& body = cntl->request_attachment();
   auto expected_crc = ParseCrc32cHeader(cntl);
-  auto report = http_.PutPart(upload_id, part_number, body, expected_crc);
+  auto report = multipart_handler_.UploadPart(upload_id, part_number, body, expected_crc);
   if (!report.success()) {
     WriteError(cntl, gateway_id_, report.error());
     return;

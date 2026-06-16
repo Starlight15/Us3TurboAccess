@@ -32,6 +32,7 @@ add_executable(us3_turbo_access_gateway
   src/data_path/gds/cuobj_resources.cpp
   src/data_path/gds/gds_executor.cpp
   src/data_path/http/http_executor.cpp
+  src/data_path/http/http_multipart_path_handler.cpp
   src/data_path/ucx/ucx_session_registry.cpp
   src/data_path/ucx/ucx_buffer_pool.cpp
   src/data_path/ucx/ucx_executor.cpp

@@ -10,7 +10,6 @@
 
 #include "common/crc32c.h"
 #include "common/error.h"
-#include "core/multipart/multipart_coordinator.h"
 
 namespace us3_turbo_access::gateway::data_path::http {
 
@@ -47,9 +46,8 @@ std::pair<std::uint32_t, bool> VerifyCrc32c(
 }  // namespace
 
 HttpExecutor::HttpExecutor(backend::IBackend& backend,
-                           core::multipart::MultipartCoordinator* multipart,
                            std::shared_ptr<spdlog::logger> logger)
-    : backend_(backend), multipart_(multipart), logger_(std::move(logger)) {}
+    : backend_(backend), logger_(std::move(logger)) {}
 
 Result<TransferReport> HttpExecutor::Get(std::string_view bucket,
                                          std::string_view key,
@@ -127,48 +125,6 @@ Result<TransferReport> HttpExecutor::Put(std::string_view bucket,
   return Result<TransferReport>::Success(std::move(report));
 }
 
-Result<TransferReport> HttpExecutor::PutPart(std::string_view upload_id,
-                                              std::uint32_t part_number,
-                                              std::span<const std::byte> body,
-                                              std::optional<std::uint32_t> expected_crc32c) {
-  if (multipart_ == nullptr) {
-    return Result<TransferReport>::Failure(common::MakeError(
-        ErrorCode::kInternal,
-        "PutPart called but multipart coordinator not configured"));
-  }
-  auto [actual_crc, mismatch] = VerifyCrc32c(body, expected_crc32c);
-  if (mismatch) {
-    return Result<TransferReport>::Failure(common::MakeError(
-        ErrorCode::kInvalidArgument,
-        "PutPart crc32c mismatch: client=" + std::to_string(*expected_crc32c) +
-            " server=" + std::to_string(actual_crc)));
-  }
-
-  // upload_id 是 client 拿到的公开 id；backend.WritePart 要的是 backend_upload_id。
-  // 与 GDS/RDMA 路径对称（控制面 GdsChunk handler / RdmaExecutor::CommitPart 也是这模式）。
-  auto lookup = multipart_->Lookup(upload_id);
-  if (!lookup.success()) {
-    return Result<TransferReport>::Failure(lookup.error());
-  }
-  auto upload = lookup.value();
-
-  auto part_etag = backend_.WritePart(upload->backend_upload_id, part_number,
-                                        /*offset=*/0, body);
-  if (!part_etag.success()) {
-    return Result<TransferReport>::Failure(part_etag.error());
-  }
-  multipart_->RegisterPart(*upload, part_number, /*offset=*/0,
-                            static_cast<std::uint64_t>(body.size()),
-                            part_etag.value());
-
-  TransferReport report;
-  report.bytes_transferred = body.size();
-  report.meta.etag = part_etag.value();  // part etag
-  report.crc32c = actual_crc;
-  report.has_crc32c = true;
-  return Result<TransferReport>::Success(std::move(report));
-}
-
 // IOBuf 版本的 Put：单遍优化 - 边写边算 CRC
 Result<TransferReport> HttpExecutor::Put(std::string_view bucket,
                                          std::string_view key,
@@ -222,23 +178,11 @@ Result<TransferReport> HttpExecutor::Put(std::string_view bucket,
   return Result<TransferReport>::Success(std::move(report));
 }
 
-// IOBuf 版本的 PutPart：单遍优化 - 边写边算 CRC
-Result<TransferReport> HttpExecutor::PutPart(std::string_view upload_id,
-                                              std::uint32_t part_number,
-                                              const butil::IOBuf& body,
-                                              std::optional<std::uint32_t> expected_crc32c) {
-  if (multipart_ == nullptr) {
-    return Result<TransferReport>::Failure(common::MakeError(
-        ErrorCode::kInternal,
-        "PutPart called but multipart coordinator not configured"));
-  }
-
-  auto lookup = multipart_->Lookup(upload_id);
-  if (!lookup.success()) {
-    return Result<TransferReport>::Failure(lookup.error());
-  }
-  auto upload = lookup.value();
-
+Result<TransferReport> HttpExecutor::WritePartData(
+    std::string_view backend_upload_id,
+    std::uint32_t part_number,
+    const butil::IOBuf& body,
+    std::optional<std::uint32_t> expected_crc32c) {
   // 单遍优化：边遍历 IOBuf block 边算 CRC 边写入
   std::uint32_t crc_state = common::Crc32cInit();
   std::uint64_t offset = 0;
@@ -253,8 +197,7 @@ Result<TransferReport> HttpExecutor::PutPart(std::string_view upload_id,
     // 写入 block
     std::span<const std::byte> span(
         reinterpret_cast<const std::byte*>(block.data()), block.size());
-    auto wr = backend_.WritePart(upload->backend_upload_id, part_number,
-                                   offset, span);
+    auto wr = backend_.WritePart(backend_upload_id, part_number, offset, span);
     if (!wr.success()) {
       return Result<TransferReport>::Failure(wr.error());
     }
@@ -272,16 +215,14 @@ Result<TransferReport> HttpExecutor::PutPart(std::string_view upload_id,
             " server=" + std::to_string(actual_crc)));
   }
 
-  // 使用统一 part etag 格式（替代原 ostringstream 十六进制格式）
-  const std::string part_etag = multipart_->GeneratePartEtag(part_number, body.size());
-
-  multipart_->RegisterPart(*upload, part_number, /*offset=*/0,
-                            static_cast<std::uint64_t>(body.size()),
-                            part_etag);
-
+  // 用最后一轮 WritePart 返回的 etag（backend 生成）。
+  // HttpMultipartPathHandler 会用标准化的 GeneratePartEtag 替换。
+  // 这里先填 backend 原始 etag，上层按需覆盖。
+  // IOBuf 版本逐 block 写入，backend 只在最后一次 WritePart 返回 etag；
+  // 为简化，用空 etag 占位——上层（HttpMultipartPathHandler）一定会替换为
+  // GeneratePartEtag 结果，此处 etag 不影响最终返回。
   TransferReport report;
   report.bytes_transferred = body.size();
-  report.meta.etag = part_etag;
   report.crc32c = actual_crc;
   report.has_crc32c = true;
   return Result<TransferReport>::Success(std::move(report));

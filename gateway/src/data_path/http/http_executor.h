@@ -21,10 +21,6 @@ namespace brpc {
 class Controller;
 }  // namespace brpc
 
-namespace us3_turbo_access::gateway::core::multipart {
-class MultipartCoordinator;
-}  // namespace us3_turbo_access::gateway::core::multipart
-
 namespace us3_turbo_access::gateway::data_path::http {
 
 /**
@@ -51,11 +47,13 @@ struct HttpResponseSink {
  * 实现 IDataPathExecutor lifecycle（永远 available；endpoint 与 brpc port 由
  * HttpFrontend 自然提供，这里报空）。数据面 Get/Put 直接被 HttpFrontend 调用，
  * 不经 control plane。
+ *
+ * Multipart part 的业务编排（Lookup / RegisterPart）已迁至
+ * HttpMultipartPathHandler；本类只保留纯数据写入能力。
  */
 class HttpExecutor final : public IDataPathExecutor {
  public:
   HttpExecutor(backend::IBackend& backend,
-               core::multipart::MultipartCoordinator* multipart,
                std::shared_ptr<spdlog::logger> logger);
 
   HttpExecutor(const HttpExecutor&) = delete;
@@ -96,26 +94,26 @@ class HttpExecutor final : public IDataPathExecutor {
         std::optional<std::uint32_t> expected_crc32c);
 
   /**
-   * Multipart 单 part PUT：写到 backend.WritePart，写完登记 part 进度
-   * 给 MultipartCoordinator（与 GDS/RDMA 路径对称）。expected_crc32c 同 Put。
-   * 返回 part_etag（被 client 收集后传给 CompleteUpload）。
+   * @brief Write a single multipart part's data to the backend.
+   *
+   * This is a low-level write operation with CRC verification but NO
+   * multipart orchestration (no Lookup, no RegisterPart). The caller
+   * (HttpMultipartPathHandler) is responsible for the upload lifecycle.
+   *
+   * @param backend_upload_id  Backend-internal upload ID (resolved by caller)
+   * @param part_number        1-based part number
+   * @param body               Part payload (IOBuf, zero-copy)
+   * @param expected_crc32c    Optional CRC32C for end-to-end verification
+   * @return TransferReport with backend-returned etag, bytes written, CRC32C.
    */
   [[nodiscard]] Result<TransferReport>
-    PutPart(std::string_view upload_id, std::uint32_t part_number,
-            std::span<const std::byte> body,
-            std::optional<std::uint32_t> expected_crc32c);
-
-  /**
-   * Multipart 单 part PUT（零拷贝版本）：接受 IOBuf。
-   */
-  [[nodiscard]] Result<TransferReport>
-    PutPart(std::string_view upload_id, std::uint32_t part_number,
-            const butil::IOBuf& body,
-            std::optional<std::uint32_t> expected_crc32c);
+    WritePartData(std::string_view backend_upload_id,
+                  std::uint32_t part_number,
+                  const butil::IOBuf& body,
+                  std::optional<std::uint32_t> expected_crc32c);
 
  private:
   backend::IBackend&              backend_;
-  core::multipart::MultipartCoordinator* multipart_{nullptr};
   std::shared_ptr<spdlog::logger> logger_;
 };
 

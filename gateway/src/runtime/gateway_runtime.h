@@ -38,6 +38,7 @@ class UcxExecutor;
 
 namespace us3_turbo_access::gateway::data_path::http {
 class HttpExecutor;
+class HttpMultipartPathHandler;
 }  // namespace us3_turbo_access::gateway::data_path::http
 
 namespace us3_turbo_access::gateway::runtime {
@@ -89,7 +90,8 @@ class GatewayRuntime {
   std::unique_ptr<core::multipart::MultipartAppService>  multipart_app_;
   std::unique_ptr<runtime::IoWorkerPool>               io_pool_;
   std::unique_ptr<core::MetadataService>               metadata_;
-  std::unique_ptr<data_path::http::HttpExecutor>       http_executor_;
+  std::unique_ptr<data_path::http::HttpExecutor>             http_executor_;
+  std::unique_ptr<data_path::http::HttpMultipartPathHandler> http_multipart_handler_;
   std::unique_ptr<core::SessionOpener>                 session_opener_;
   std::unique_ptr<data_path::gds::GdsExecutor>         gds_executor_;
   std::unique_ptr<data_path::ucx::UcxExecutor>         ucx_executor_;

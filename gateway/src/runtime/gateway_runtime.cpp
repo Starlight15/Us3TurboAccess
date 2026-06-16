@@ -25,6 +25,7 @@
 #include "data_path/ucx/ucx_executor.h"
 #include "runtime/io_worker_pool.h"
 #include "data_path/http/http_executor.h"
+#include "data_path/http/http_multipart_path_handler.h"
 #include "common/error.h"
 #include "common/log.h"
 
@@ -84,7 +85,9 @@ Result<bool> GatewayRuntime::Initialize() {
   multipart_app_ = std::make_unique<core::multipart::MultipartAppService>(
       *multipart_coordinator_, logger_);
   http_executor_ = std::make_unique<data_path::http::HttpExecutor>(
-      *backend_, multipart_coordinator_.get(), logger_);
+      *backend_, logger_);
+  http_multipart_handler_ = std::make_unique<data_path::http::HttpMultipartPathHandler>(
+      *http_executor_, *multipart_coordinator_, logger_);
   io_pool_ = std::make_unique<runtime::IoWorkerPool>(
       static_cast<std::size_t>(std::max(1, options_.io_worker_threads)));
 
@@ -123,7 +126,7 @@ Result<bool> GatewayRuntime::Initialize() {
       *multipart_app_, *multipart_coordinator_, *io_pool_, logger_);
   http_frontend_ = std::make_unique<api::HttpFrontend>(
       options_.gateway_id, *metadata_, *http_executor_,
-      *multipart_app_, options_.http_max_put_bytes, logger_);
+      *http_multipart_handler_, *multipart_app_, options_.http_max_put_bytes, logger_);
 
   brpc::ServerOptions server_options;
   server_options.idle_timeout_sec = options_.idle_timeout_sec;
@@ -206,6 +209,7 @@ void GatewayRuntime::Shutdown() {
   }
   ucx_executor_.reset();
   io_pool_.reset();
+  http_multipart_handler_.reset();
   http_executor_.reset();
   multipart_app_.reset();
   multipart_coordinator_.reset();

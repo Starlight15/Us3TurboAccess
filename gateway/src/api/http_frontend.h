@@ -24,6 +24,7 @@ class MultipartAppService;
 
 namespace us3_turbo_access::gateway::data_path::http {
 class HttpExecutor;
+class HttpMultipartPathHandler;
 }  // namespace us3_turbo_access::gateway::data_path::http
 
 namespace us3_turbo_access::gateway::api {
@@ -44,6 +45,7 @@ class HttpFrontend final : public ::us3_turbo_access::gateway::GatewayHttpServic
  public:
   HttpFrontend(std::string gateway_id, core::MetadataService& metadata,
                data_path::http::HttpExecutor& http,
+               data_path::http::HttpMultipartPathHandler& multipart_handler,
                core::multipart::MultipartAppService& multipart,
                std::size_t max_put_bytes,
                std::shared_ptr<spdlog::logger> logger);
@@ -73,12 +75,13 @@ class HttpFrontend final : public ::us3_turbo_access::gateway::GatewayHttpServic
   void HandleAbortUpload(brpc::Controller* cntl,
                          const std::string& upload_id);
 
-  std::string                              gateway_id_;
-  core::MetadataService&                   metadata_;
-  data_path::http::HttpExecutor&           http_;
-  core::multipart::MultipartAppService&   multipart_;
-  std::size_t                              max_put_bytes_{0};
-  std::shared_ptr<spdlog::logger>          logger_;
+  std::string                                        gateway_id_;
+  core::MetadataService&                             metadata_;
+  data_path::http::HttpExecutor&                     http_;
+  data_path::http::HttpMultipartPathHandler&         multipart_handler_;
+  core::multipart::MultipartAppService&              multipart_;
+  std::size_t                                        max_put_bytes_{0};
+  std::shared_ptr<spdlog::logger>                    logger_;
 };
 
 }  // namespace us3_turbo_access::gateway::api
