@@ -6,6 +6,16 @@
 
 namespace us3_turbo_access::client {
 
+namespace {
+
+// UCX worker progress loop 参数
+// 无工作时连续 spin 次数超过阈值后 yield，降低 CPU 占用
+// 阈值权衡：过低则高负载时频繁 yield 影响吞吐；过高则低负载时 CPU 空转
+// 当前值 64 基于 RDMA 典型延迟（1-10us）+ spin 开销（~50ns/次）平衡
+constexpr int kSpinCountBeforeYield = 64;
+
+}  // namespace
+
 Result<std::unique_ptr<UcxWorker>> UcxWorker::Create(UcxContext& ctx) {
   ucp_worker_params_t params{};
   params.field_mask  = UCP_WORKER_PARAM_FIELD_THREAD_MODE;
@@ -45,7 +55,7 @@ void UcxWorker::ProgressLoop() {
     if (ucp_worker_progress(worker_)) {
       idle = 0;
     } else {
-      if (++idle > 64) {
+      if (++idle > kSpinCountBeforeYield) {
         sched_yield();
         idle = 0;
       }

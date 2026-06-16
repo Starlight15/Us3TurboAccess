@@ -186,9 +186,16 @@ RdmaTransferPath::PrepareAndWrite(const RequestOptions& request,
         DataPath::kNativeRdma, session_id, true));
   }
 
-  // slot（ep+rkey）留给 ReturnEp 归还 pool
-  return Result<WritePrepared>::Success(
-      WritePrepared{session_id, request_id, gateway_id, gw_host, gw_port, slot});
+  // slot（ep+rkey）留给 RAII WritePrepared 归还 pool
+  WritePrepared prepared;
+  prepared.session_id  = std::move(session_id);
+  prepared.request_id  = std::move(request_id);
+  prepared.gateway_id  = std::move(gateway_id);
+  prepared.ep_host     = std::move(gw_host);
+  prepared.ep_port     = gw_port;
+  prepared.slot        = std::move(slot);
+  prepared.owner       = this;
+  return Result<WritePrepared>::Success(std::move(prepared));
 }
 
 // ---- PutObject ----
@@ -223,7 +230,7 @@ Result<TransferOutcome> RdmaTransferPath::PutObject(
         prepared.value().session_id,
         static_cast<std::uint64_t>(buffer.size), client_crc_b64);
 
-    ReturnEp(prepared.value(), commit.success());
+    prepared.value().release(commit.success());
 
     if (!commit.success()) {
       (void)data_plane_client_.AbortSession(prepared.value().session_id);
@@ -282,7 +289,7 @@ Result<TransferOutcome> RdmaTransferPath::PutObjectPart(
         prepared.value().session_id, upload_id, part_number,
         static_cast<std::uint64_t>(buffer.size), client_crc_b64);
 
-    ReturnEp(prepared.value(), commit.success());
+    prepared.value().release(commit.success());
 
     if (!commit.success()) {
       (void)data_plane_client_.AbortSession(prepared.value().session_id);

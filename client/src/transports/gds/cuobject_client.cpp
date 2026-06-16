@@ -36,7 +36,6 @@ template <typename BufferPointer>
         "GDS transfer requires non-null buffer and positive size"));
   }
 
-  auto* mutable_buffer = const_cast<void*>(static_cast<const void*>(buffer));
   const auto req_bytes = static_cast<std::size_t>(std::min<std::uint64_t>(
       request.length.value_or(buffer_size), buffer_size));
   if (req_bytes == 0U) {
@@ -46,7 +45,7 @@ template <typename BufferPointer>
 
   // 1. AcquireToken：未注册则 lazy register；token RAII 持有
   GdsMemoryRegistry registry;
-  auto tok = registry.AcquireToken(mutable_buffer, req_bytes, 0, op);
+  auto tok = registry.AcquireToken(buffer, req_bytes, 0, op);
   if (!tok.success()) return Result<TransferOutcome>::Failure(tok.error());
 
   // 2. 一次 RPC 把 token 送到 gateway，等待 gateway 完成 RDMA 后响应

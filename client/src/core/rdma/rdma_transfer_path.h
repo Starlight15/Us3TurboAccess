@@ -62,6 +62,42 @@ class RdmaTransferPath final : public TransferPath {
     std::string ep_host;
     uint16_t    ep_port{0};
     EpSlot      slot{};    // ep + rkey，成功归还 pool，失败 Discard
+
+    WritePrepared() = default;
+
+    // RAII 支持
+    const RdmaTransferPath* owner   = nullptr;
+    bool                    released = false;
+
+    ~WritePrepared() {
+      if (!released && owner && slot.ep) {
+        owner->ReturnEp(*this, false);  // 析构时默认失败归还（Discard）
+      }
+    }
+
+    // 禁止拷贝，允许移动
+    WritePrepared(const WritePrepared&) = delete;
+    WritePrepared& operator=(const WritePrepared&) = delete;
+    WritePrepared(WritePrepared&& other) noexcept
+        : session_id(std::move(other.session_id)),
+          request_id(std::move(other.request_id)),
+          gateway_id(std::move(other.gateway_id)),
+          ep_host(std::move(other.ep_host)),
+          ep_port(other.ep_port),
+          slot(other.slot),
+          owner(other.owner),
+          released(other.released) {
+      other.released = true;  // 移动后源对象不再管理
+    }
+    WritePrepared& operator=(WritePrepared&&) = delete;
+
+    // 显式 release：成功时归还 pool，失败时 Discard
+    void release(bool success) {
+      if (owner && slot.ep) {
+        owner->ReturnEp(*this, success);
+        released = true;
+      }
+    }
   };
 
   [[nodiscard]] Result<WritePrepared>

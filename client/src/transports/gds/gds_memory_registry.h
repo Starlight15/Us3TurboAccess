@@ -87,6 +87,13 @@ class GdsMemoryRegistry {
   [[nodiscard]] Result<GdsRdmaToken>
       AcquireToken(void* ptr, std::size_t size, std::size_t offset,
                     OperationType op);
+
+  // const 重载：PUT 路径使用 const buffer，内部 const_cast 一次
+  // （cuMemObjGetRDMAToken 签名是 CUdeviceptr，本质是 uint64_t，
+  //   CUDA 驱动不修改 buffer 内容）。
+  [[nodiscard]] Result<GdsRdmaToken>
+      AcquireToken(const void* ptr, std::size_t size, std::size_t offset,
+                    OperationType op);
 };
 
 // 老 API 保留：空 struct，调用方仅用 Result 的成功/失败。

@@ -13,6 +13,9 @@
 namespace us3_turbo_access::client {
 namespace {
 
+// cuFile 最优对齐粒度：前 k-1 块按 4KB 对齐提升 DMA 性能（避免 unaligned access）
+constexpr std::uint64_t kGpuPageSize = 4096;
+
 [[nodiscard]] Error MakeGdsUnsupportedError() {
   return MakeUnsupportedPath(DataPath::kGdsCuObject,
                              "The current environment does not support the GDS channel");
@@ -103,18 +106,23 @@ Result<TransferOutcome> GdsTransferPath::GetObjectParallel(
       static_cast<std::size_t>(total));
   if (k <= 1) return GetObjectSingle(request, buffer);
 
-  // 均匀切：前 (total % k) 块多 1 字节。
-  const std::uint64_t base = total / k;
-  const std::uint64_t rem  = total % k;
-  std::uint64_t       cursor_off = request.offset;
-  std::uint64_t       cursor_buf = 0;
+  // 对齐到 4KB GPU page 边界，提升 cuFile DMA 性能（避免 unaligned access）
+  const std::uint64_t base_aligned = (total / k / kGpuPageSize) * kGpuPageSize;
+  const std::uint64_t aligned_total = base_aligned * k;
+  const std::uint64_t rem_bytes = total - aligned_total;
+
+  std::uint64_t cursor_off = request.offset;
+  std::uint64_t cursor_buf = 0;
 
   using SubResult = std::pair<Result<TransferOutcome>, std::uint64_t>;
   std::vector<std::future<SubResult>> futs;
   futs.reserve(k);
 
   for (std::size_t i = 0; i < k; ++i) {
-    const std::uint64_t len = base + (i < rem ? 1 : 0);
+    // 前 k-1 块对齐，最后一块包含剩余字节
+    const std::uint64_t len = (i == k - 1) ? (base_aligned + rem_bytes) : base_aligned;
+    if (len == 0) continue;  // 跳过空块（total < k * kGpuPageSize 时）
+
     const std::uint64_t off = cursor_off;
     void* dst = static_cast<std::byte*>(buffer.data) + cursor_buf;
     MutableBufferView sub{.data = dst, .size = len, .type = buffer.type};

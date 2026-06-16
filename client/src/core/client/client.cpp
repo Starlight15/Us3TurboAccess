@@ -270,6 +270,9 @@ MultipartUpload::UploadParts(const std::vector<PartSpec>& parts,
   for (auto& t : threads) t.join();
 
   if (shared.first_error.has_value()) {
+    // 任一 part 失败时自动 abort multipart session，避免已上传 part 泄漏。
+    // Best-effort：Abort 失败仍返回原始错误。
+    (void)Abort();
     return Result<std::vector<TransferOutcome>>::Failure(*shared.first_error);
   }
   return Result<std::vector<TransferOutcome>>::Success(std::move(outcomes));

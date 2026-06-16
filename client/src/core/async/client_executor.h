@@ -39,7 +39,7 @@ class ClientExecutor {
 
   /** Submit 后立即返回 future；任务在某个 bthread 上执行。Stop 后再调抛。*/
   template <typename F>
-  auto Submit(F&& fn) -> std::future<std::invoke_result_t<F>>;
+  [[nodiscard]] auto Submit(F&& fn) -> std::future<std::invoke_result_t<F>>;
 
   /**
    * 显式排空 + 关闭。返回 true 表示 grace 期内所有 inflight 都退出。

@@ -12,6 +12,7 @@
 #include "client/src/core/async/client_executor.h"
 #include "client/src/core/common/crc32c_helper.h"
 #include "client/src/core/common/errors.h"
+#include "client/src/core/http/future_utils.h"
 #include "client/src/data/http_crc32c.h"
 
 namespace us3_turbo_access::client {
@@ -142,8 +143,8 @@ Result<TransferOutcome> HttpTransferPath::GetObjectParallel(
 
   std::uint64_t        total_bytes = 0;
   std::string          etag, version;
-  for (auto& f : futs) {
-    auto sr = f.get();
+  auto results = when_all(futs);
+  for (auto& sr : results) {
     auto& r = sr.first;
     const auto expected = sr.second;
     if (!r.success()) {

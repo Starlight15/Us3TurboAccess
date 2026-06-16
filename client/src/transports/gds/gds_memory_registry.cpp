@@ -259,4 +259,12 @@ GdsMemoryRegistry::AcquireToken(void* ptr, std::size_t size,
       GdsRdmaToken(&st.api(), st.client_raw(), tok));
 }
 
+Result<GdsRdmaToken>
+GdsMemoryRegistry::AcquireToken(const void* ptr, std::size_t size,
+                                 std::size_t offset, OperationType op) {
+  // 内部 const_cast 一次：cuMemObjGetRDMAToken 签名是 CUdeviceptr
+  // （本质 uint64_t），CUDA 驱动不修改 buffer 内容。
+  return AcquireToken(const_cast<void*>(ptr), size, offset, op);
+}
+
 }  // namespace us3_turbo_access::client
