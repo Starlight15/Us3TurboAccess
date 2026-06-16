@@ -25,6 +25,7 @@ class SessionSweeper;
 namespace us3_turbo_access::gateway::core::multipart {
 class MultipartStore;
 class MultipartCoordinator;
+class MultipartAppService;
 }  // namespace us3_turbo_access::gateway::core::multipart
 
 namespace us3_turbo_access::gateway::data_path::gds {
@@ -85,6 +86,7 @@ class GatewayRuntime {
   std::unique_ptr<core::SessionSweeper>                session_sweeper_;
   std::unique_ptr<core::multipart::MultipartStore>     multipart_store_;
   std::unique_ptr<core::multipart::MultipartCoordinator> multipart_coordinator_;
+  std::unique_ptr<core::multipart::MultipartAppService>  multipart_app_;
   std::unique_ptr<runtime::IoWorkerPool>               io_pool_;
   std::unique_ptr<core::MetadataService>               metadata_;
   std::unique_ptr<data_path::http::HttpExecutor>       http_executor_;

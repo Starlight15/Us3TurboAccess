@@ -21,7 +21,7 @@
 
 #include "common/range.h"
 #include "core/metadata/metadata_service.h"
-#include "core/multipart/multipart_coordinator.h"
+#include "core/multipart/multipart_app_service.h"
 #include "data_path/http/http_executor.h"
 #include "common/error.h"
 #include "common/metrics.h"
@@ -257,7 +257,7 @@ void WriteError(brpc::Controller* cntl, std::string_view gateway_id,
 HttpFrontend::HttpFrontend(std::string gateway_id,
                            core::MetadataService& metadata,
                            data_path::http::HttpExecutor& http,
-                           core::multipart::MultipartCoordinator& multipart,
+                           core::multipart::MultipartAppService& multipart,
                            std::size_t max_put_bytes,
                            std::shared_ptr<spdlog::logger> logger)
     : gateway_id_(std::move(gateway_id)),
@@ -560,7 +560,7 @@ void HttpFrontend::HandleStartUpload(brpc::Controller* cntl,
     params.idempotency_key = *q;
   }
 
-  auto out = multipart_.CreateUpload(params);
+  auto out = multipart_.StartUpload(params);
   if (!out.success()) {
     WriteError(cntl, gateway_id_, out.error());
     return;

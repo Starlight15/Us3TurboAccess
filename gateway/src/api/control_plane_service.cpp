@@ -9,6 +9,7 @@
 #include "common/metrics.h"
 #include "backend/backend.h"
 #include "core/metadata/metadata_service.h"
+#include "core/multipart/multipart_app_service.h"
 #include "core/multipart/multipart_coordinator.h"
 #include "core/session_opener/session_opener.h"
 #include "core/session/session_store.h"
@@ -86,14 +87,16 @@ ControlPlaneService::ControlPlaneService(core::SessionStore& sessions,
                                          core::MetadataService& metadata,
                                          core::SessionOpener& session_opener,
                                          data_path::gds::GdsExecutor* gds_executor,
-                                         core::multipart::MultipartCoordinator& multipart,
+                                         core::multipart::MultipartAppService& multipart_app,
+                                         core::multipart::MultipartCoordinator& multipart_coord,
                                          runtime::IoWorkerPool& io_pool,
                                          std::shared_ptr<spdlog::logger> logger)
     : sessions_(sessions),
       metadata_(metadata),
       session_opener_(session_opener),
       gds_executor_(gds_executor),
-      multipart_(multipart),
+      multipart_app_(multipart_app),
+      multipart_coord_(multipart_coord),
       io_pool_(io_pool),
       logger_(std::move(logger)) {}
 
@@ -250,7 +253,7 @@ void ControlPlaneService::HandleGdsPut(
   (void)sessions_.BumpActive(session->session_id);
   // multipart 分支
   if (!request->upload_id().empty()) {
-    auto lookup = multipart_.Lookup(request->upload_id());
+    auto lookup = multipart_coord_.Lookup(request->upload_id());
     if (!lookup.success()) {
       common::metrics().gds_put_fail_total << 1;
       (void)sessions_.MarkFailed(session->session_id);
@@ -269,7 +272,7 @@ void ControlPlaneService::HandleGdsPut(
       return;
     }
     // 登记 part 进度，供 CompleteUpload 校验。
-    multipart_.RegisterPart(*upload, request->part_number(),
+    multipart_coord_.RegisterPart(*upload, request->part_number(),
                             request->chunk_offset(), request->chunk_size(),
                             part_etag.value());
     common::metrics().gds_put_total << 1;
@@ -312,7 +315,7 @@ void ControlPlaneService::StartUpload(
   }
   params.data_path       = request->data_path();
   params.idempotency_key = request->idempotency_key();
-  auto out = multipart_.CreateUpload(params);
+  auto out = multipart_app_.StartUpload(params);
   if (!out.success()) {
     cntl->SetFailed(out.error().message);
     return;
@@ -336,7 +339,7 @@ void ControlPlaneService::CompleteUpload(
     pr.etag = p.etag();
     parts.push_back(std::move(pr));
   }
-  auto meta = multipart_.CompleteUpload(request->upload_id(), parts,
+  auto meta = multipart_app_.CompleteUpload(request->upload_id(), parts,
                                         request->data_path());
   if (!meta.success()) {
     cntl->SetFailed(meta.error().message);
@@ -354,7 +357,7 @@ void ControlPlaneService::AbortUpload(
     google::protobuf::Closure* done) {
   brpc::ClosureGuard done_guard(done);
   auto* cntl = static_cast<brpc::Controller*>(cntl_base);
-  auto result = multipart_.AbortUpload(request->upload_id(),
+  auto result = multipart_app_.AbortUpload(request->upload_id(),
                                        request->data_path());
   if (!result.success()) {
     cntl->SetFailed(result.error().message);

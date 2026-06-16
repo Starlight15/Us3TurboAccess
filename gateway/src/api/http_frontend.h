@@ -19,7 +19,7 @@ class MetadataService;
 }  // namespace us3_turbo_access::gateway::core
 
 namespace us3_turbo_access::gateway::core::multipart {
-class MultipartCoordinator;
+class MultipartAppService;
 }  // namespace us3_turbo_access::gateway::core::multipart
 
 namespace us3_turbo_access::gateway::data_path::http {
@@ -44,7 +44,7 @@ class HttpFrontend final : public ::us3_turbo_access::gateway::GatewayHttpServic
  public:
   HttpFrontend(std::string gateway_id, core::MetadataService& metadata,
                data_path::http::HttpExecutor& http,
-               core::multipart::MultipartCoordinator& multipart,
+               core::multipart::MultipartAppService& multipart,
                std::size_t max_put_bytes,
                std::shared_ptr<spdlog::logger> logger);
 
@@ -76,7 +76,7 @@ class HttpFrontend final : public ::us3_turbo_access::gateway::GatewayHttpServic
   std::string                              gateway_id_;
   core::MetadataService&                   metadata_;
   data_path::http::HttpExecutor&           http_;
-  core::multipart::MultipartCoordinator&   multipart_;
+  core::multipart::MultipartAppService&   multipart_;
   std::size_t                              max_put_bytes_{0};
   std::shared_ptr<spdlog::logger>          logger_;
 };

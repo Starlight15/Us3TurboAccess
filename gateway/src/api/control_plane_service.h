@@ -20,6 +20,7 @@ class SessionStore;
 }  // namespace us3_turbo_access::gateway::core
 
 namespace us3_turbo_access::gateway::core::multipart {
+class MultipartAppService;
 class MultipartCoordinator;
 }  // namespace us3_turbo_access::gateway::core::multipart
 
@@ -48,7 +49,8 @@ class ControlPlaneService final : public ::us3_turbo_access::gateway::ControlPla
                       core::MetadataService& metadata,
                       core::SessionOpener& session_opener,
                       data_path::gds::GdsExecutor* gds_executor,
-                      core::multipart::MultipartCoordinator& multipart,
+                      core::multipart::MultipartAppService& multipart_app,
+                      core::multipart::MultipartCoordinator& multipart_coord,
                       runtime::IoWorkerPool& io_pool,
                       std::shared_ptr<spdlog::logger> logger);
 
@@ -124,7 +126,8 @@ class ControlPlaneService final : public ::us3_turbo_access::gateway::ControlPla
   core::MetadataService&           metadata_;
   core::SessionOpener&             session_opener_;
   data_path::gds::GdsExecutor*     gds_executor_{nullptr};
-  core::multipart::MultipartCoordinator& multipart_;
+  core::multipart::MultipartAppService&   multipart_app_;
+  core::multipart::MultipartCoordinator&  multipart_coord_;
   runtime::IoWorkerPool&           io_pool_;
   std::shared_ptr<spdlog::logger>  logger_;
 };

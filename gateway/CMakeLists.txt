@@ -26,6 +26,7 @@ add_executable(us3_turbo_access_gateway
   src/core/session_opener/session_opener.cpp
   src/core/multipart/multipart_store.cpp
   src/core/multipart/multipart_coordinator.cpp
+  src/core/multipart/multipart_app_service.cpp
   src/data_path/data_path_executor.cpp
   src/data_path/gds/buffer_pool.cpp
   src/data_path/gds/cuobj_resources.cpp

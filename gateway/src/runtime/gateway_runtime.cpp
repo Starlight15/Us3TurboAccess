@@ -17,6 +17,7 @@
 #include "core/metadata/metadata_service.h"
 #include "core/multipart/multipart_coordinator.h"
 #include "core/multipart/multipart_store.h"
+#include "core/multipart/multipart_app_service.h"
 #include "core/session_opener/session_opener.h"
 #include "core/session/session_store.h"
 #include "core/session/session_sweeper.h"
@@ -80,6 +81,8 @@ Result<bool> GatewayRuntime::Initialize() {
   multipart_coordinator_ = std::make_unique<core::multipart::MultipartCoordinator>(
       *backend_, *multipart_store_, options_.multipart_max_part_size,
       options_.multipart_min_part_size, logger_);
+  multipart_app_ = std::make_unique<core::multipart::MultipartAppService>(
+      *multipart_coordinator_, logger_);
   http_executor_ = std::make_unique<data_path::http::HttpExecutor>(
       *backend_, multipart_coordinator_.get(), logger_);
   io_pool_ = std::make_unique<runtime::IoWorkerPool>(
@@ -117,10 +120,10 @@ Result<bool> GatewayRuntime::Initialize() {
 
   control_plane_ = std::make_unique<api::ControlPlaneService>(
       *sessions_, *metadata_, *session_opener_, gds_executor_.get(),
-      *multipart_coordinator_, *io_pool_, logger_);
+      *multipart_app_, *multipart_coordinator_, *io_pool_, logger_);
   http_frontend_ = std::make_unique<api::HttpFrontend>(
       options_.gateway_id, *metadata_, *http_executor_,
-      *multipart_coordinator_, options_.http_max_put_bytes, logger_);
+      *multipart_app_, options_.http_max_put_bytes, logger_);
 
   brpc::ServerOptions server_options;
   server_options.idle_timeout_sec = options_.idle_timeout_sec;
@@ -204,6 +207,7 @@ void GatewayRuntime::Shutdown() {
   ucx_executor_.reset();
   io_pool_.reset();
   http_executor_.reset();
+  multipart_app_.reset();
   multipart_coordinator_.reset();
   multipart_store_.reset();
   metadata_.reset();
