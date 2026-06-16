@@ -208,14 +208,19 @@ void GatewayRuntime::Shutdown() {
   http_frontend_.reset();  // typically already released to brpc; safe no-op.
   session_opener_.reset();
   gds_multipart_handler_.reset();
-  ucx_multipart_handler_.reset();
   if (gds_executor_ != nullptr) {
     gds_executor_->Stop();
   }
   gds_executor_.reset();
+  // UCX: must stop the executor (which joins the progress thread and
+  // drains all pending_commit callbacks) BEFORE destroying the handler.
+  // The handler's async callbacks no longer capture `this`, but the
+  // executor's Stop() must complete so no callbacks are in flight when
+  // we tear down the rest.
   if (ucx_executor_ != nullptr) {
     ucx_executor_->Stop();
   }
+  ucx_multipart_handler_.reset();
   ucx_executor_.reset();
   io_pool_.reset();
   http_multipart_handler_.reset();

@@ -12,6 +12,7 @@
 
 namespace us3_turbo_access::gateway::core::multipart {
 class MultipartCoordinator;
+struct MultipartUpload;
 }  // namespace us3_turbo_access::gateway::core::multipart
 
 namespace us3_turbo_access::gateway::data_path::ucx {
@@ -26,6 +27,22 @@ class UcxExecutor;
  */
 struct UcxMultipartPartResult {
   std::string part_etag;
+};
+
+/**
+ * @brief Self-contained context for completing an async multipart part commit.
+ *
+ * Captures everything needed by the completion callback so that it does NOT
+ * depend on UcxMultipartPathHandler being alive. Even if the handler object
+ * is destroyed before write_done fires, this context holds its own references
+ * and the callback can complete safely.
+ */
+struct CommitPartContext {
+  core::multipart::MultipartCoordinator*        coordinator{nullptr};
+  std::shared_ptr<core::multipart::MultipartUpload> upload;
+  std::uint32_t                                  part_number{0};
+  std::uint64_t                                  bytes_transferred{0};
+  std::function<void(Result<UcxMultipartPartResult>)> on_done;
 };
 
 /**
@@ -46,6 +63,14 @@ struct UcxMultipartPartResult {
  *   Returns true  = sync completion (on_done already called).
  *   Returns false = async; on_done will be called on the progress thread
  *                   when write_done arrives.
+ *
+ * Lifetime safety:
+ *   The async completion callback does NOT capture `this`. Instead it uses
+ *   CommitPartContext + FinishCommitPart, which only hold raw pointers to
+ *   MultipartCoordinator (guaranteed to outlive the executor's progress
+ *   thread) and shared_ptr<MultipartUpload> (reference-counted). So the
+ *   UcxMultipartPathHandler object itself can be destroyed at any time
+ *   without risking use-after-free in a pending callback.
  */
 class UcxMultipartPathHandler final {
  public:
@@ -77,5 +102,18 @@ class UcxMultipartPathHandler final {
   core::multipart::MultipartCoordinator&        coordinator_;
   std::shared_ptr<spdlog::logger>               logger_;
 };
+
+/**
+ * @brief Completion helper for CommitPartDataAsync.
+ *
+ * Called when the executor finishes writing a part to the backend.
+ * Registers the part with MultipartCoordinator and forwards the
+ * result through the original on_done callback.
+ *
+ * This is a free function (not a member) so that it does not depend
+ * on UcxMultipartPathHandler's lifetime.
+ */
+void FinishCommitPart(std::shared_ptr<CommitPartContext> ctx,
+                      Result<std::string> write_result);
 
 }  // namespace us3_turbo_access::gateway::data_path::ucx
