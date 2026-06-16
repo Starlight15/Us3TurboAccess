@@ -19,7 +19,6 @@
 #include "common/error.h"
 #include "common/metrics.h"
 #include "core/metadata/metadata_service.h"
-#include "core/multipart/multipart_coordinator.h"
 #include "core/session/session.h"
 
 namespace us3_turbo_access::gateway::data_path::ucx {
@@ -60,11 +59,10 @@ constexpr std::size_t kPageSize = 4096;
 UcxExecutor::UcxExecutor(std::string public_host, std::string bind_host,
                           const UcxOptions& opts, backend::IBackend& backend,
                           core::MetadataService& metadata,
-                          core::multipart::MultipartCoordinator* multipart,
                           std::shared_ptr<spdlog::logger> logger)
     : public_host_(std::move(public_host)), bind_host_(std::move(bind_host)),
       opts_(opts), backend_(backend), metadata_(metadata),
-      multipart_(multipart), logger_(std::move(logger)),
+      logger_(std::move(logger)),
       session_registry_(std::make_unique<UcxSessionRegistry>()) {}
 
 UcxExecutor::~UcxExecutor() { Stop(); }
@@ -416,11 +414,11 @@ Result<UcxCommitInfo> UcxExecutor::DoCommitObject(
   return Result<UcxCommitInfo>::Success(std::move(info));
 }
 
-// ---- DoCommitPart：落盘逻辑（同步路径或 pending_commit 调用）----
+// ---- DoWritePartData：低层 part 落盘（CRC + backend WritePart），无 multipart 语义 ----
 
-Result<UcxCommitPartInfo> UcxExecutor::DoCommitPart(
+Result<std::string> UcxExecutor::DoWritePartData(
     std::shared_ptr<UcxSessionEntry>& entry,
-    std::string_view upload_id, std::uint32_t part_number,
+    std::string_view backend_upload_id, std::uint32_t part_number,
     std::uint64_t bytes_transferred,
     std::string_view client_crc32c_b64) {
   const std::size_t data_size = static_cast<std::size_t>(bytes_transferred);
@@ -429,23 +427,14 @@ Result<UcxCommitPartInfo> UcxExecutor::DoCommitPart(
 
   // CRC32C 校验已关闭（性能优化）
   // if (auto v = VerifyCrc32c(view, client_crc32c_b64); !v.success())
-  //   return Result<UcxCommitPartInfo>::Failure(v.error());
+  //   return Result<std::string>::Failure(v.error());
 
-  auto lookup = multipart_->Lookup(upload_id);
-  if (!lookup.success()) return Result<UcxCommitPartInfo>::Failure(lookup.error());
-  auto upload = lookup.value();
-  auto part = backend_.WritePart(upload->backend_upload_id, part_number, 0, view);
-  if (!part.success()) return Result<UcxCommitPartInfo>::Failure(part.error());
-  const std::string part_etag = part.value();
-  multipart_->RegisterPart(*upload, part_number, 0,
-                            static_cast<std::uint64_t>(data_size), part_etag);
-
-  UcxCommitPartInfo info;
-  info.part_etag = part_etag;
-  return Result<UcxCommitPartInfo>::Success(std::move(info));
+  auto part = backend_.WritePart(backend_upload_id, part_number, 0, view);
+  if (!part.success()) return Result<std::string>::Failure(part.error());
+  return part;
 }
 
-// ---- CommitObjectAsync / CommitPartAsync ----
+// ---- CommitObjectAsync ----
 //
 // 协议：
 //   write_done=true  → 直接落盘，on_done 同步调用，返回 true
@@ -507,26 +496,27 @@ bool UcxExecutor::CommitObjectAsync(
   return false;
 }
 
-bool UcxExecutor::CommitPartAsync(
-    std::string_view session_id, std::string_view upload_id,
-    std::uint32_t part_number, std::uint64_t bytes_transferred,
-    std::string_view client_crc32c_b64,
-    std::function<void(Result<UcxCommitPartInfo>)> on_done) {
-  if (!multipart_) {
-    on_done(Result<UcxCommitPartInfo>::Failure(
-        common::MakeError(ErrorCode::kUnsupported, "UCX multipart not configured")));
-    return true;
-  }
+// ---- CommitPartDataAsync ----
+//
+// 同样的 write_done 同步/异步协议，但用于 multipart part 数据写入。
+// 无 multipart 协调语义（Lookup / RegisterPart 由 UcxMultipartPathHandler 处理）。
 
+bool UcxExecutor::CommitPartDataAsync(
+    std::string_view session_id,
+    std::string_view backend_upload_id,
+    std::uint32_t part_number,
+    std::uint64_t bytes_transferred,
+    std::string_view client_crc32c_b64,
+    std::function<void(Result<std::string>)> on_done) {
   auto entry = session_registry_->Find(session_id);
   if (!entry) {
-    on_done(Result<UcxCommitPartInfo>::Failure(common::MakeError(
+    on_done(Result<std::string>::Failure(common::MakeError(
         ErrorCode::kSessionNotFound,
-        "UCX CommitPart: session not found: " + std::string(session_id))));
+        "UCX CommitPartData: session not found: " + std::string(session_id))));
     return true;
   }
   if (!entry->slot || !entry->slot->buf) {
-    on_done(Result<UcxCommitPartInfo>::Failure(common::MakeError(
+    on_done(Result<std::string>::Failure(common::MakeError(
         ErrorCode::kInternal, "UCX session buffer not allocated")));
     return true;
   }
@@ -537,18 +527,23 @@ bool UcxExecutor::CommitPartAsync(
     common::metrics().ucx_put_inflight << -1;
   };
 
+  // 快速路径：数据已到
   if (entry->write_done.load(std::memory_order_acquire)) {
-    auto r = DoCommitPart(entry, upload_id, part_number, bytes_transferred, client_crc32c_b64);
+    auto r = DoWritePartData(entry, backend_upload_id, part_number,
+                              bytes_transferred, client_crc32c_b64);
     release_and_erase();
     on_done(std::move(r));
     return true;
   }
 
-  std::string uid(upload_id);
+  // 慢速路径：注册 pending_commit，等 OnAmWriteDone
+  std::string uid(backend_upload_id);
   {
     std::lock_guard lk(entry->commit_mu);
+    // double-check
     if (entry->write_done.load(std::memory_order_acquire)) {
-      auto r = DoCommitPart(entry, upload_id, part_number, bytes_transferred, client_crc32c_b64);
+      auto r = DoWritePartData(entry, backend_upload_id, part_number,
+                                bytes_transferred, client_crc32c_b64);
       release_and_erase();
       on_done(std::move(r));
       return true;
@@ -556,7 +551,7 @@ bool UcxExecutor::CommitPartAsync(
     entry->pending_commit = [this, entry, uid, part_number, bytes_transferred,
                               crc = std::string(client_crc32c_b64),
                               on_done = std::move(on_done), release_and_erase]() mutable {
-      auto r = DoCommitPart(entry, uid, part_number, bytes_transferred, crc);
+      auto r = DoWritePartData(entry, uid, part_number, bytes_transferred, crc);
       release_and_erase();
       on_done(std::move(r));
     };

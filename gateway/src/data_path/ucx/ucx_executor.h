@@ -28,10 +28,6 @@ namespace us3_turbo_access::gateway::core {
 class MetadataService;
 }
 
-namespace us3_turbo_access::gateway::core::multipart {
-class MultipartCoordinator;
-}
-
 namespace us3_turbo_access::gateway::data_path::ucx {
 
 /** PrepareTransfer 返回给 client。 */
@@ -54,6 +50,9 @@ struct UcxCommitPartInfo{ std::string part_etag; };
  *   → CommitObject(等 write_done → CRC → WriteRange)
  *
  * UCX worker 为 MULTI 模式；progress_thread_ 驱动 NIC 完成回调。
+ *
+ * Multipart part 的业务编排（Lookup / RegisterPart）已迁至
+ * UcxMultipartPathHandler；本类只保留纯数据写入能力。
  */
 class UcxExecutor final : public data_path::IDataPathExecutor {
  public:
@@ -64,7 +63,6 @@ class UcxExecutor final : public data_path::IDataPathExecutor {
               const UcxOptions& opts,
               backend::IBackend& backend,
               core::MetadataService& metadata,
-              core::multipart::MultipartCoordinator* multipart,
               std::shared_ptr<spdlog::logger> logger);
   ~UcxExecutor() override;
 
@@ -103,11 +101,28 @@ class UcxExecutor final : public data_path::IDataPathExecutor {
                       std::string_view client_crc32c_b64,
                       std::function<void(Result<UcxCommitInfo>)> on_done);
 
+  /**
+   * @brief Async commit of a multipart part's data to the backend.
+   *
+   * This is a low-level data-path operation with NO multipart orchestration
+   * (no Lookup, no RegisterPart). The caller (UcxMultipartPathHandler) is
+   * responsible for the upload lifecycle and part registration.
+   *
+   * @param session_id         UCX session ID
+   * @param backend_upload_id  Backend-internal upload ID (resolved by caller)
+   * @param part_number        1-based part number
+   * @param bytes_transferred  Number of bytes the client wrote
+   * @param client_crc32c_b64  Optional base64-encoded CRC32C from client
+   * @param on_done            Completion callback; receives the backend etag.
+   * @return true = sync (on_done called), false = async pending.
+   */
   [[nodiscard]] bool
-    CommitPartAsync(std::string_view session_id, std::string_view upload_id,
-                    std::uint32_t part_number, std::uint64_t bytes_transferred,
-                    std::string_view client_crc32c_b64,
-                    std::function<void(Result<UcxCommitPartInfo>)> on_done);
+    CommitPartDataAsync(std::string_view session_id,
+                        std::string_view backend_upload_id,
+                        std::uint32_t part_number,
+                        std::uint64_t bytes_transferred,
+                        std::string_view client_crc32c_b64,
+                        std::function<void(Result<std::string>)> on_done);
 
   [[nodiscard]] Result<bool> AbortSession(std::string_view session_id);
 
@@ -122,24 +137,24 @@ class UcxExecutor final : public data_path::IDataPathExecutor {
   void ProgressLoop();
   void ReleaseEntry(std::shared_ptr<UcxSessionEntry> entry);
 
-  // CommitObject/CommitPart 共用的落盘逻辑，由同步路径或 pending_commit 调用
+  // CommitObject 落盘逻辑，由同步路径或 pending_commit 调用
   [[nodiscard]] Result<UcxCommitInfo>
     DoCommitObject(std::shared_ptr<UcxSessionEntry>& entry,
                    std::uint64_t bytes_transferred,
                    std::string_view client_crc32c_b64);
 
-  [[nodiscard]] Result<UcxCommitPartInfo>
-    DoCommitPart(std::shared_ptr<UcxSessionEntry>& entry,
-                 std::string_view upload_id, std::uint32_t part_number,
-                 std::uint64_t bytes_transferred,
-                 std::string_view client_crc32c_b64);
+  // CommitPartData 低层落盘逻辑：CRC + backend WritePart，无 multipart 语义
+  [[nodiscard]] Result<std::string>
+    DoWritePartData(std::shared_ptr<UcxSessionEntry>& entry,
+                    std::string_view backend_upload_id, std::uint32_t part_number,
+                    std::uint64_t bytes_transferred,
+                    std::string_view client_crc32c_b64);
 
   std::string                                    public_host_;
   std::string                                    bind_host_;
   UcxOptions                                     opts_;
   backend::IBackend&                             backend_;
   core::MetadataService&                         metadata_;
-  core::multipart::MultipartCoordinator*         multipart_{nullptr};
   std::shared_ptr<spdlog::logger>                logger_;
 
   ucp_context_h                                  ucp_ctx_{nullptr};

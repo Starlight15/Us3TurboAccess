@@ -24,6 +24,7 @@
 #include "data_path/gds/gds_executor.h"
 #include "data_path/gds/gds_multipart_path_handler.h"
 #include "data_path/ucx/ucx_executor.h"
+#include "data_path/ucx/ucx_multipart_path_handler.h"
 #include "runtime/io_worker_pool.h"
 #include "data_path/http/http_executor.h"
 #include "data_path/http/http_multipart_path_handler.h"
@@ -113,11 +114,13 @@ Result<bool> GatewayRuntime::Initialize() {
         options_.bind_host == "0.0.0.0" ? options_.public_host : options_.bind_host;
     ucx_executor_ = std::make_unique<data_path::ucx::UcxExecutor>(
         options_.public_host, ucx_bind, options_.ucx, *backend_, *metadata_,
-        multipart_coordinator_.get(), logger_);
+        logger_);
     auto started = ucx_executor_->Start();
     if (!started.success()) {
       return Result<bool>::Failure(started.error());
     }
+    ucx_multipart_handler_ = std::make_unique<data_path::ucx::UcxMultipartPathHandler>(
+        *ucx_executor_, *multipart_coordinator_, logger_);
   }
 
   session_opener_ = std::make_unique<core::SessionOpener>(
@@ -147,7 +150,7 @@ Result<bool> GatewayRuntime::Initialize() {
   // UCX 数据面 brpc service。
   if (ucx_executor_ != nullptr) {
     rdma_data_plane_ = std::make_unique<api::RdmaDataPlaneService>(
-        *ucx_executor_, logger_);
+        *ucx_executor_, *ucx_multipart_handler_, logger_);
     if (server_.AddService(rdma_data_plane_.get(),
                             brpc::SERVER_DOESNT_OWN_SERVICE) != 0) {
       return Result<bool>::Failure(common::MakeError(
@@ -205,6 +208,7 @@ void GatewayRuntime::Shutdown() {
   http_frontend_.reset();  // typically already released to brpc; safe no-op.
   session_opener_.reset();
   gds_multipart_handler_.reset();
+  ucx_multipart_handler_.reset();
   if (gds_executor_ != nullptr) {
     gds_executor_->Stop();
   }

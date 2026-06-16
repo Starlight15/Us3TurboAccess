@@ -6,13 +6,17 @@
 #include <spdlog/logger.h>
 
 #include "data_path/ucx/ucx_executor.h"
+#include "data_path/ucx/ucx_multipart_path_handler.h"
 
 namespace us3_turbo_access::gateway::api {
 
 RdmaDataPlaneService::RdmaDataPlaneService(
     data_path::ucx::UcxExecutor& executor,
+    data_path::ucx::UcxMultipartPathHandler& multipart_handler,
     std::shared_ptr<spdlog::logger> logger)
-    : executor_(executor), logger_(std::move(logger)) {}
+    : executor_(executor),
+      multipart_handler_(multipart_handler),
+      logger_(std::move(logger)) {}
 
 void RdmaDataPlaneService::DiscoverRdmaEndpoint(
     google::protobuf::RpcController* cntl_base,
@@ -77,11 +81,12 @@ void RdmaDataPlaneService::CommitPart(
     google::protobuf::Closure* done) {
   auto* cntl = static_cast<brpc::Controller*>(cntl_base);
 
-  bool sync = executor_.CommitPartAsync(
+  // Multipart part commit：业务编排委托给 UcxMultipartPathHandler
+  bool sync = multipart_handler_.CommitPartAsync(
       request->session_id(), request->upload_id(),
       request->part_number(), request->bytes_transferred(),
       request->client_checksum(),
-      [cntl, response, done](Result<data_path::ucx::UcxCommitPartInfo> info) {
+      [cntl, response, done](Result<data_path::ucx::UcxMultipartPartResult> info) {
         if (!info.success()) { cntl->SetFailed(info.error().message); }
         else { response->set_part_etag(info.value().part_etag); }
         done->Run();

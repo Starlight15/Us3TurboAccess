@@ -37,6 +37,7 @@ add_executable(us3_turbo_access_gateway
   src/data_path/ucx/ucx_session_registry.cpp
   src/data_path/ucx/ucx_buffer_pool.cpp
   src/data_path/ucx/ucx_executor.cpp
+  src/data_path/ucx/ucx_multipart_path_handler.cpp
   src/runtime/gateway_runtime.cpp
   src/runtime/io_worker_pool.cpp)
 

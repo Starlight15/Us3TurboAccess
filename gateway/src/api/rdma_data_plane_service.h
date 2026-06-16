@@ -12,6 +12,7 @@ namespace spdlog { class logger; }
 
 namespace us3_turbo_access::gateway::data_path::ucx {
 class UcxExecutor;
+class UcxMultipartPathHandler;
 }
 
 namespace us3_turbo_access::gateway::api {
@@ -19,8 +20,9 @@ namespace us3_turbo_access::gateway::api {
 class RdmaDataPlaneService final
     : public ::us3_turbo_access::gateway::RdmaDataPlaneService {
  public:
-  explicit RdmaDataPlaneService(data_path::ucx::UcxExecutor& executor,
-                                std::shared_ptr<spdlog::logger> logger);
+  RdmaDataPlaneService(data_path::ucx::UcxExecutor& executor,
+                       data_path::ucx::UcxMultipartPathHandler& multipart_handler,
+                       std::shared_ptr<spdlog::logger> logger);
 
   void DiscoverRdmaEndpoint(
       google::protobuf::RpcController*,
@@ -53,8 +55,9 @@ class RdmaDataPlaneService final
       google::protobuf::Closure*) override;
 
  private:
-  data_path::ucx::UcxExecutor&    executor_;
-  std::shared_ptr<spdlog::logger> logger_;
+  data_path::ucx::UcxExecutor&                executor_;
+  data_path::ucx::UcxMultipartPathHandler&     multipart_handler_;
+  std::shared_ptr<spdlog::logger>              logger_;
 };
 
 }  // namespace us3_turbo_access::gateway::api
