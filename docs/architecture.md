@@ -419,6 +419,26 @@ sequenceDiagram
 ```
 
 **说明：**
+UCX 分片上传一个 part，分四步，核心思路是数据先搬、再通知、最后提交：
+
+  ① 备场地（PrepareTransfer）
+
+  客户端告诉网关"我要写 N 字节"，网关分配一块 pinned memory，注册到 RDMA
+  网卡，把这块内存的地址（gw_raddr）和访问密钥（gw_packed_rkey）返回给客户端。之后客户端就能直接往这块内存写数据，网关 CPU 完全不参与。
+
+  ② 搬数据（RMA WRITE）
+
+  客户端用 ucp_put_nbx 把数据直接写入网关内存。这是 RDMA 硬件完成的——数据从客户端内存直达网关内存，不经内核协议栈，不经网关
+  CPU。但问题是：网关此时不知道数据已经到了。
+
+  ③ 告知就绪（AM 通知 + CommitPart）
+
+  客户端发一个 Active Message（kAmIdWriteDone），告诉网关"数据写完了"。然后发 CommitPart RPC，触发网关把 pinned buffer
+  里的数据落盘。之所以要两步而不是一步，是因为 AM 只负责通知、不带业务语义，CommitPart 才携带 upload_id、part_number、CRC32C 等业务参数。
+
+  ④ 落盘响应
+
+  网关收到 CommitPart 后，如果 write_done 已置位（快速路径），直接写后端；如果 AM 还没到（慢速路径），先注册回调等 AM 到了再写。写完后返回 part_etag。
 
 1. **两阶段提交**：UCX 通路的数据传输与提交是解耦的。RMA WRITE 把数据搬到网关 pinned buffer，但此时网关并不知道数据就绪——客户端必须再发 AM 通知（`kAmIdWriteDone`）和 `CommitPart` RPC 触发落盘。这种"先写后提交"模式使 RMA WRITE 可以与后续操作流水化。
 2. **AM 通知保证**：同一 endpoint 上 AM 在 RMA WRITE 之后发出，UCX 保证按序到达——因此 `CommitPart` 到达时 `write_done` 信号已就绪，无需额外 flush。
