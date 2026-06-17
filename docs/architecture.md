@@ -4,15 +4,16 @@
 
 ## 1. 综述
 
-Us3TurboAccess 是一个面向 GPU 对象存储的高性能传输 SDK 及其参考网关实现。项目以 NVIDIA GPUDirect Storage（GDS/cuObject）为主数据通路，HTTP/TCP 和 UCX RDMA 为备选通路，提供整对象与分片上传的端到端传输能力。
+Us3TurboAccess 是一个面向 GPU 与 Native RDMA 的高性能对象存储接入层，并兼容传统 HTTP 通路。项目由客户端 SDK（`libus3_turbo_access_client`）与网关（`us3_turbo_access_gateway`）两部分对等组成：SDK 在应用侧封装传输协议与生命周期，网关负责协议适配、会话编排与后端落盘。数据面以 GPUDirect Storage（GDS/cuObject）和 Native RDMA（UCX RMA WRITE）两条零拷贝高速通路为核心，HTTP/1.1 作为兼容/兜底通路，三者运行时按 `DataPath` 枚举路由，提供整对象与分片上传的端到端传输能力。
 
 **核心特性：**
 
-- **多传输通路**：GDS（GPU RDMA）、Native RDMA（UCX RMA WRITE）、HTTP/1.1 三通路可配，运行时按 `DataPath` 枚举路由
+- **多传输通路**：GDS（GPU 直达 RDMA）与 Native RDMA（UCX RMA WRITE）两条零拷贝高速通路为核心，HTTP/1.1 作为兼容通路，运行时按 `DataPath` 枚举路由
 - **GPU 直传**：GDS 通路绕过 CPU 内存拷贝，cuObjServer 在网关侧完成 RDMA 操作，GPU buffer 直达后端存储
+- **Native RDMA 零拷贝**：UCX 通路以 RMA WRITE + Active Message 通知实现 CPU 侧零拷贝传输，绕开内核协议栈
 - **CRC32C 端到端校验**：PUT 时客户端计算校验和、服务端复算验证；GET 时服务端计算、客户端验证
-- **分片上传**：SDK 内建 MultipartUpload handle，支持串行 `UploadPart` 和并发 `UploadParts`（固定 worker + fetch-add 流水线模型）
-- **会话生命周期管理**：TTL 自动过期 + SessionSweeper 定时清扫，防止会话泄漏
+- **分片上传**：SDK 与网关协同支持分片上传全生命周期；SDK 内建 MultipartUpload handle，支持串行 `UploadPart` 和并发 `UploadParts`（固定 worker + fetch-add 流水线模型），网关侧支持跨 chunk MD5 累积
+- **会话生命周期管理**：网关侧 TTL 自动过期 + SessionSweeper 定时清扫，防止会话泄漏
 - **线程安全**：Client 对象线程安全；MultipartUpload 单所有者语义
 
 **技术栈：**
