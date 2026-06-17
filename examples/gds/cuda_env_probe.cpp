@@ -1,27 +1,29 @@
-// CUDA environment probe — 快速验证 CUDA 运行时环境完整性
-//
-// 目的：
-//   单步验证 CUDA 运行时 API 调用链路，明确区分驱动/运行时版本不匹配、
-//   设备不可用、内存分配失败等常见环境问题。用于新环境部署、驱动升级后
-//   的第一道检查，避免将环境问题误判为业务代码 bug。
-//
-// 执行原理（按依赖顺序逐步验证）：
-//   1. cudaDriverGetVersion / cudaRuntimeGetVersion — 版本兼容性
-//   2. cudaGetDeviceCount / cudaSetDevice(0)       — 设备可见性
-//   3. cudaGetDeviceProperties                     — SM 版本、显存大小
-//   4. cudaMalloc / cudaMemset                     — GPU 内存分配与初始化
-//   5. cudaMemcpy H2D + D2H round trip             — 主机↔设备传输正确性
-//   6. cudaFree                                    — 资源清理
-//
-// 常见失败场景：
-//   - cudaDriverGetVersion 失败 → 驱动未加载或版本过旧（需 ≥ 11.x）
-//   - device_count=0           → 无 GPU 或被 MIG/exclusive 模式独占
-//   - cudaMalloc 失败          → 显存不足；先运行 nvidia-smi 检查占用
-//   - H2D/D2H round trip 不一致 → PCIe 通道错误或 ECC 内存校正失败
-//
-// 用法：
-//   ./us3_turbo_access_cuda_env_probe
-//   所有步骤通过时输出 "ALL OK"，任一步骤失败立即退出并打印出错信息
+/*
+ * CUDA environment probe — 快速验证 CUDA 运行时环境完整性
+ *
+ * 目的：
+ *   单步验证 CUDA 运行时 API 调用链路，明确区分驱动/运行时版本不匹配、
+ *   设备不可用、内存分配失败等常见环境问题。用于新环境部署、驱动升级后
+ *   的第一道检查，避免将环境问题误判为业务代码 bug。
+ *
+ * 执行原理（按依赖顺序逐步验证）：
+ *   1. cudaDriverGetVersion / cudaRuntimeGetVersion — 版本兼容性
+ *   2. cudaGetDeviceCount / cudaSetDevice(0)       — 设备可见性
+ *   3. cudaGetDeviceProperties                     — SM 版本、显存大小
+ *   4. cudaMalloc / cudaMemset                     — GPU 内存分配与初始化
+ *   5. cudaMemcpy H2D + D2H round trip             — 主机↔设备传输正确性
+ *   6. cudaFree                                    — 资源清理
+ *
+ * 常见失败场景：
+ *   - cudaDriverGetVersion 失败 → 驱动未加载或版本过旧（需 ≥ 11.x）
+ *   - device_count=0           → 无 GPU 或被 MIG/exclusive 模式独占
+ *   - cudaMalloc 失败          → 显存不足；先运行 nvidia-smi 检查占用
+ *   - H2D/D2H round trip 不一致 → PCIe 通道错误或 ECC 内存校正失败
+ *
+ * 用法：
+ *   ./us3_turbo_access_cuda_env_probe
+ *   所有步骤通过时输出 "ALL OK"，任一步骤失败立即退出并打印出错信息
+ */
 
 #include <cuda_runtime.h>
 

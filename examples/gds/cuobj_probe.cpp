@@ -1,33 +1,35 @@
-// cuObj library integration probe — GDS (GPUDirect Storage) 底层验证
-//
-// 目的：
-//   验证 libcuobjclient.so 动态库的 dlopen、符号解析、回调机制、
-//   Put/Get 操作在当前环境中的可用性和正确性。隔离 GDS 集成问题与
-//   业务逻辑，用于新环境首次部署或 CUDA/nvidia-fs 版本升级后的环境检查。
-//
-// 执行原理：
-//   1. 按候选路径列表 dlopen libcuobjclient.so.1，适配多 CUDA 版本安装路径
-//   2. 通过 mangled name 解析 cuObjClient C++ 类的 constructor/destructor/
-//      getDescriptor/putDescriptor/cuObjGet/cuObjPut 符号（libcuobjclient 无 C ABI）
-//   3. 分配 GPU device buffer，注册到 cuObj client（获得 RDMA descriptor）
-//   4. 触发 cuObjPut/cuObjGet，回调注入的 ProbeGet/ProbePut 验证参数传递
-//   5. 输出每步的成功/失败状态及 RDMA token 信息
-//
-// 使用场景：
-//   - 新机器首次部署：确认 nvidia-fs 服务、cuFile 库、RDMA 驱动就绪
-//   - CUDA 版本升级后：验证 ABI 兼容性（mangled name 可能变化）
-//   - 调试 GDS 集成：区分是环境问题（probe 失败）还是业务代码问题（probe 通过）
-//
-// 常见失败场景：
-//   - dlopen 失败：libcuobjclient.so.1 未安装或路径不在候选列表
-//   - 符号解析失败：CUDA 版本不匹配导致 mangled name 变化
-//   - isConnected=false：nvidia-fs 服务未启动或 RDMA 设备不可用
-//   - getDescriptor 失败：buffer 未正确对齐或 cuFile 配置错误
-//   - callback 未触发：cuObj 内部状态机异常或回调注册失败
-//
-// 用法：
-//   ./us3_turbo_access_cuobj_probe [buffer_size_bytes]
-//   默认 buffer_size=4096，可传入参数测试不同大小的 buffer 注册
+/*
+ * cuObj library integration probe — GDS (GPUDirect Storage) 底层验证
+ *
+ * 目的：
+ *   验证 libcuobjclient.so 动态库的 dlopen、符号解析、回调机制、
+ *   Put/Get 操作在当前环境中的可用性和正确性。隔离 GDS 集成问题与
+ *   业务逻辑，用于新环境首次部署或 CUDA/nvidia-fs 版本升级后的环境检查。
+ *
+ * 执行原理：
+ *   1. 按候选路径列表 dlopen libcuobjclient.so.1，适配多 CUDA 版本安装路径
+ *   2. 通过 mangled name 解析 cuObjClient C++ 类的 constructor/destructor/
+ *      getDescriptor/putDescriptor/cuObjGet/cuObjPut 符号（libcuobjclient 无 C ABI）
+ *   3. 分配 GPU device buffer，注册到 cuObj client（获得 RDMA descriptor）
+ *   4. 触发 cuObjPut/cuObjGet，回调注入的 ProbeGet/ProbePut 验证参数传递
+ *   5. 输出每步的成功/失败状态及 RDMA token 信息
+ *
+ * 使用场景：
+ *   - 新机器首次部署：确认 nvidia-fs 服务、cuFile 库、RDMA 驱动就绪
+ *   - CUDA 版本升级后：验证 ABI 兼容性（mangled name 可能变化）
+ *   - 调试 GDS 集成：区分是环境问题（probe 失败）还是业务代码问题（probe 通过）
+ *
+ * 常见失败场景：
+ *   - dlopen 失败：libcuobjclient.so.1 未安装或路径不在候选列表
+ *   - 符号解析失败：CUDA 版本不匹配导致 mangled name 变化
+ *   - isConnected=false：nvidia-fs 服务未启动或 RDMA 设备不可用
+ *   - getDescriptor 失败：buffer 未正确对齐或 cuFile 配置错误
+ *   - callback 未触发：cuObj 内部状态机异常或回调注册失败
+ *
+ * 用法：
+ *   ./us3_turbo_access_cuobj_probe [buffer_size_bytes]
+ *   默认 buffer_size=4096，可传入参数测试不同大小的 buffer 注册
+ */
 
 #include <cuda_runtime.h>
 
