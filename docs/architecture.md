@@ -276,7 +276,7 @@ gateway/
 | 维度 | GDS 通路 | HTTP 通路 | UCX 通路 |
 |------|----------|-----------|----------|
 | **数据搬运** | cuObjServer RDMA READ（网关主动拉取 GPU buffer） | HTTP PUT body（客户端推送） | UCX RMA WRITE（客户端主动写入网关 buffer） |
-| **per-part 会话** | OpenSession(is_multipart_part=true) + 多 GdsPut chunk | 无需 OpenSession，直接 HTTP PUT | OpenSession + DiscoverRdmaEndpoint |
+| **per-part 会话** | OpenSession(expected_size=0) + 多 GdsPut chunk | 无需 OpenSession，直接 HTTP PUT | OpenSession(expected_size=0) + DiscoverRdmaEndpoint |
 | **校验** | 跨 chunk MD5 累积（checksum_policy=md5 时） | 流式 CRC32C | CRC32C（CommitPart 时比对） |
 | **part etag** | 后端 etag 或跨 chunk MD5 hex | `"{part_number}-{size}"` 标准化格式 | 后端 etag |
 | **并发友好** | 每个 chunk 独立 RDMA | 天然独立 | RMA WRITE + AM 信令天然并发 |
@@ -320,12 +320,11 @@ sequenceDiagram
     autonumber
     participant SDK as Client SDK
     participant GW as Gateway
-    participant cuObj as cuObjServer
     participant BE as Backend
 
     Note over SDK,BE: 每个 part 开一个独立 session
-    SDK->>GW: OpenSession(op=PUT, GDS, is_multipart_part=true)
-    Note over GW: 跳过整对象 backend.Reserve()
+    SDK->>GW: OpenSession(op=PUT, GDS, expected_size=0)
+    Note over GW: expected_size==0 → OnSessionOpened 跳过 Reserve
     GW-->>SDK: session_id, ticket
 
     SDK->>SDK: AcquireToken(buffer) — cuObj descriptor 注册
@@ -333,9 +332,8 @@ sequenceDiagram
     loop 大 part 自动拆为多个 chunk
         SDK->>GW: GdsPut(session_id, ticket, rdma_token, upload_id, part_number, chunk_offset, chunk_size)
         GW->>GW: PrepareGdsChunk() — 校验 session + token + BumpActive
-        GW->>cuObj: handlePutObject(rdma_token) — RDMA READ
-        Note over cuObj: 从客户端 GPU buffer → 网关 pinned buffer
-        cuObj-->>GW: transferred bytes
+        GW->>GW: cuObjServer.handlePutObject(rdma_token, channel, length)
+        Note over GW,SDK: RDMA READ ← 客户端 GPU buffer → 网关 pinned buffer<br/>NVIDIA cuObj 库发起，客户端软件不参与
         GW->>BE: backend.WritePart(backend_upload_id, part_number, offset, data)
         BE-->>GW: write result
         alt checksum_policy == "md5"
@@ -348,10 +346,11 @@ sequenceDiagram
 
 **说明：**
 
-1. **per-part OpenSession**：每个 part 独立开一个 GDS session，`is_multipart_part=true` 使网关跳过整对象的 `backend.Reserve()`。session 生命周期覆盖该 part 的全部 chunk。
-2. **跨 chunk MD5 累积**：当 `checksum_policy="md5"` 时，网关在 `MultipartUpload::part_md5_ctxs` 中按 `part_number` 维护独立的 `MD5_CTX`。同一 part 的多个 chunk 通过 `MD5_Update` 累积；每次返回时 `MD5_Final` 仅作用于 CTX 的**副本**，原始 CTX 保留供后续 chunk 继续累积。最后一个 chunk 的 MD5 即为该 part 的最终 etag。
-3. **ChunkDispatcher**：客户端 `PutObjectPart` 内部由 `ChunkDispatcher` 按网关 `put_single_max_bytes` 自动拆分大 part，对调用者透明。每个 chunk 是一次独立的 `GdsPut` RPC，共享同一个 session_id。
-4. **rdma_token RAII**：`AcquireToken` 在函数返回时自动释放 cuObj descriptor，避免 GPU buffer 注销前 descriptor 泄漏。
+1. **per-part OpenSession**：每个 part 独立开一个 GDS session，客户端故意设置 `expected_size=0`（不传 part 大小），网关 `OnSessionOpened()` 仅在 `expected_size != 0` 时才调用 `backend.Reserve()`，因此分片 part 自动跳过整对象预分配。session 生命周期覆盖该 part 的全部 chunk。
+2. **cuObjServer RDMA READ**：`handlePutObject` 是网关调用 NVIDIA cuObjServer 库的同步接口，由网关侧发起 RDMA READ，通过 `rdma_token` 定位客户端 GPU buffer，将数据拉取到网关侧的 pinned buffer。整个过程对客户端透明——客户端只需在 `GdsPut` RPC 中携带 `rdma_token`，RDMA 由网关+cUObj 库完成。
+3. **跨 chunk MD5 累积**：当 `checksum_policy="md5"` 时，网关在 `MultipartUpload::part_md5_ctxs` 中按 `part_number` 维护独立的 `MD5_CTX`。同一 part 的多个 chunk 通过 `MD5_Update` 累积；每次返回时 `MD5_Final` 仅作用于 CTX 的**副本**，原始 CTX 保留供后续 chunk 继续累积。最后一个 chunk 的 MD5 即为该 part 的最终 etag。
+4. **ChunkDispatcher**：客户端 `PutObjectPart` 内部由 `ChunkDispatcher` 按网关 `put_single_max_bytes` 自动拆分大 part，对调用者透明。每个 chunk 是一次独立的 `GdsPut` RPC，共享同一个 session_id。
+5. **rdma_token RAII**：`AcquireToken` 在函数返回时自动释放 cuObj descriptor，避免 GPU buffer 注销前 descriptor 泄漏。
 
 ---
 
@@ -397,7 +396,7 @@ sequenceDiagram
     participant BE as Backend
 
     Note over SDK,BE: 每个 part 开一个独立 session
-    SDK->>GW: OpenSession(op=PUT, RDMA, is_multipart_part=true)
+    SDK->>GW: OpenSession(op=PUT, RDMA, expected_size=0)
     GW-->>SDK: session_id, ticket
 
     SDK->>GW: DiscoverRdmaEndpoint(session_id, bytes)
