@@ -3,39 +3,33 @@
 #include "client/src/control/metadata_client.h"
 #include "client/src/core/common/errors.h"
 #include "client/src/core/rdma/rdma_transfer_path.h"
+#include "client/src/core/upload/multipart_session_base.h"
 
 namespace us3_turbo_access::client {
 
 namespace {
 
-class RdmaMultipartSession final : public IMultipartSession {
+class RdmaMultipartSession final : public MultipartSessionBase {
  public:
   RdmaMultipartSession(const MetadataClient& metadata,
                        const RdmaTransferPath& transfer_path,
                        ObjectId object,
                        std::string upload_id,
                        std::size_t max_part_size)
-      : metadata_(metadata),
-        transfer_path_(transfer_path),
-        object_(std::move(object)),
-        upload_id_(std::move(upload_id)),
-        max_part_size_(max_part_size) {}
+      : MultipartSessionBase(std::move(object), std::move(upload_id),
+                             max_part_size, /*set_length=*/true),
+        metadata_(metadata),
+        transfer_path_(transfer_path) {}
 
-  const std::string& upload_id() const noexcept override { return upload_id_; }
-  std::size_t        max_part_size() const noexcept override { return max_part_size_; }
-
-  Result<TransferOutcome> UploadPart(std::uint32_t part_number,
-                                     std::uint64_t object_offset,
-                                     const std::string& checksum_policy,
-                                     ConstBufferView buffer) override {
-    RequestOptions request;
-    request.object          = object_;
-    request.offset          = object_offset;
-    request.checksum_policy = checksum_policy;
-    request.length          = buffer.size;  // server BindSession needs to pre-allocate
-    return transfer_path_.PutObjectPart(request, buffer, upload_id_, part_number);
+  // ---- 传输层转发 ----
+  // set_length=true: server BindSession needs to pre-allocate buffer.
+  Result<TransferOutcome> DoPutObjectPart(
+      const RequestOptions& request, ConstBufferView buffer,
+      const std::string& upload_id, std::uint32_t part_number) override {
+    return transfer_path_.PutObjectPart(request, buffer, upload_id, part_number);
   }
 
+  // ---- 协议层：UCX 走 MetadataClient RPC ----
   Result<CompleteResult> Complete(const std::vector<PartRef>& parts) override {
     std::vector<PartCompletion> rpc_parts;
     rpc_parts.reserve(parts.size());
@@ -54,9 +48,6 @@ class RdmaMultipartSession final : public IMultipartSession {
  private:
   const MetadataClient&   metadata_;
   const RdmaTransferPath& transfer_path_;
-  ObjectId                object_;
-  std::string             upload_id_;
-  std::size_t             max_part_size_;
 };
 
 }  // namespace
