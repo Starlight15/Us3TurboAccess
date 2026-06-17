@@ -73,7 +73,7 @@ done
 declare -A BENCH_BIN
 BENCH_BIN[rdma:put]="${US3_BUILD_DIR}/bench/us3_turbo_access_rdma_put_bench"
 BENCH_BIN[rdma:multipart]="${US3_BUILD_DIR}/bench/us3_turbo_access_rdma_multipart_bench"
-BENCH_BIN[gds:put]="${US3_BUILD_DIR}/bench/us3_turbo_access_gds_put_bench_v2"
+BENCH_BIN[gds:put]="${US3_BUILD_DIR}/bench/us3_turbo_access_gds_put_bench"
 BENCH_BIN[gds:multipart]="${US3_BUILD_DIR}/bench/us3_turbo_access_gds_multipart_bench"
 BENCH_BIN[http:put]="${US3_BUILD_DIR}/bench/us3_turbo_access_http_put_bench"
 BENCH_BIN[http:multipart]="${US3_BUILD_DIR}/bench/us3_turbo_access_http_multipart_bench"
