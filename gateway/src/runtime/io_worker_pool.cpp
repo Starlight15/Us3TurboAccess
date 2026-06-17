@@ -23,11 +23,18 @@ void IoWorkerPool::Submit(std::function<void()> task) {
     task();
     return;
   }
+  bool was_empty;
   {
     std::scoped_lock lock(mu_);
+    was_empty = queue_.empty();
     queue_.push_back(std::move(task));
   }
-  cv_.notify_one();
+  // 队列从空变非空时唤醒所有 worker，否则只唤醒一个
+  if (was_empty) {
+    cv_.notify_all();
+  } else {
+    cv_.notify_one();
+  }
 }
 
 void IoWorkerPool::Stop() {

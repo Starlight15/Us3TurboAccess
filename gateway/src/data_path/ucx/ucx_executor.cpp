@@ -27,6 +27,12 @@ namespace {
 
 constexpr std::size_t kPageSize = 4096;
 
+// UCX progress loop：无工作时 spin 次数超过此阈值后用 epoll/nanosleep 等待
+constexpr int kSpinCountBeforeWait = 64;
+
+// Stop 时强制关闭 ep 的最大 progress 次数（约 100ms @0.5ms/progress）
+constexpr int kMaxProgressOnEpClose = 200;
+
 [[nodiscard]] Error MakeUcxError(std::string message) {
   Error err;
   err.code      = ErrorCode::kRdmaUnavailable;
@@ -214,7 +220,7 @@ void UcxExecutor::Stop() {
   for (ucp_ep_h ep : accepted_eps_) {
     void* req = ucp_ep_close_nb(ep, UCP_EP_CLOSE_MODE_FORCE);
     if (UCS_PTR_IS_PTR(req)) {
-      for (int i = 0; i < 200 && ucp_request_check_status(req) == UCS_INPROGRESS; ++i)
+      for (int i = 0; i < kMaxProgressOnEpClose && ucp_request_check_status(req) == UCS_INPROGRESS; ++i)
         ucp_worker_progress(ucp_worker_);
       ucp_request_free(req);
     }
@@ -257,7 +263,7 @@ void UcxExecutor::ProgressLoop() {
     }
     if (stop_.load(std::memory_order_acquire)) break;
     ++idle_count;
-    if (idle_count < 64) { sched_yield(); continue; }
+    if (idle_count < kSpinCountBeforeWait) { sched_yield(); continue; }
     if (epfd >= 0) {
       if (ucp_worker_arm(ucp_worker_) == UCS_OK) {
         epoll_event ready{};
