@@ -34,6 +34,10 @@ bench/logs/*
 bench/results/
 nohup.out
 
+# third_party 构建产物（src/ patches/ scripts 入库，build/ install/ 不入库）
+third_party/build/
+third_party/install/
+
 # os
 .DS_Store
 Thumbs.db
