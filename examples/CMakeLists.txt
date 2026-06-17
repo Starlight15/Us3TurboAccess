@@ -55,16 +55,10 @@ endforeach()
 
 # GDS probes
 add_executable(us3_turbo_access_cuobj_probe     gds/cuobj_probe.cpp)
-add_executable(us3_turbo_access_env_probe       gds/env_probe.cpp)
-add_executable(us3_turbo_access_gds_token_probe gds/gds_token_probe.cpp)
+add_executable(us3_turbo_access_cuda_env_probe  gds/cuda_env_probe.cpp)
 
 target_include_directories(us3_turbo_access_cuobj_probe PRIVATE ${CUFILE_INCLUDE_DIR})
 target_link_libraries(us3_turbo_access_cuobj_probe PRIVATE ${CUDART_LIBRARY} dl)
 
-target_include_directories(us3_turbo_access_env_probe PRIVATE ${CUFILE_INCLUDE_DIR})
-target_link_libraries(us3_turbo_access_env_probe PRIVATE ${CUDART_LIBRARY})
-
-target_include_directories(us3_turbo_access_gds_token_probe
-  PRIVATE ${PROJECT_SOURCE_DIR} ${CUFILE_INCLUDE_DIR})
-target_link_libraries(us3_turbo_access_gds_token_probe
-  PRIVATE Us3TurboAccess::client ${CUDART_LIBRARY})
+target_include_directories(us3_turbo_access_cuda_env_probe PRIVATE ${CUFILE_INCLUDE_DIR})
+target_link_libraries(us3_turbo_access_cuda_env_probe PRIVATE ${CUDART_LIBRARY})
