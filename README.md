@@ -21,10 +21,30 @@ under `client/src/` is internal.
 
 ## Build
 
+### 1. Build dependencies (first time only)
+
+Build static dependencies from the bundled source tarballs:
+
 ```sh
-cmake -S . -B build-local -DCMAKE_BUILD_TYPE=RelWithDebInfo
-cmake --build build-local --target us3_turbo_access_client us3_turbo_access_gds_example
+./third_party/build_deps.sh
 ```
+
+This builds protobuf, brpc, spdlog, and abseil into `third_party/install/`. Run once per checkout, or after `git clean -fdx`.
+
+### 2. Build the project
+
+```sh
+./do_make.sh
+```
+
+Or manually:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build build -j$(nproc)
+```
+
+Artifacts are written to `build/`.
 
 ## Run the end-to-end test
 
