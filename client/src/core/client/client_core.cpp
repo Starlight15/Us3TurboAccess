@@ -4,89 +4,13 @@
 #include <chrono>
 #include <thread>
 
-#include "client/src/control/metadata_client.h"
-#include "client/src/core/async/client_executor.h"
-#include "client/src/core/client/capability_probe.h"
-#include "client/src/core/common/channel_registry.h"
 #include "client/src/core/common/errors.h"
-#include "client/src/core/gds/gds_context.h"
-#include "client/src/core/gds/gds_transfer_path.h"
-#include "client/src/core/http/http_transfer_path.h"
-#include "client/src/core/rdma/rdma_transfer_path.h"
-#include "client/src/core/routing/transfer_router.h"
-#include "client/src/core/upload/upload_coordinator.h"
-#include "client/src/data/gds_data_client.h"
-#include "client/src/data/http_data_client.h"
-#include "client/src/data/rdma_data_plane_client.h"
-#include "client/src/transports/gds/cuobject_client.h"
-#include "client/src/transports/gds/gds_memory_registry.h"
-// rdma_resources.h removed (verbs deleted)
 
 namespace us3_turbo_access::client {
 
-struct ClientCore::Impl {
-  /* HttpTransferPath 需要并发 GET 的 worker 池；它在 Initialize 才被创建，
-   * 而 Impl 构造期 async_executor 还是空。这里给一个稳定的 functor，每次
-   * 调用直接从 Impl 取最新 async_executor 指针，未就绪自动降级单连接。*/
-  struct AsyncExecutorAccessor {
-    Impl* impl;
-    ClientExecutor* operator()() const { return impl->async_executor.get(); }
-  };
-
-  explicit Impl(ClientOptions opts)
-      : options(std::move(opts)),
-        caps(DetectPlatformCapabilities(options)),
-        channels(options),
-        metadata_client(channels, options),
-        gds_data_client(channels, options),
-        rdma_data_plane_client(channels, options),
-        http_data_client(options),
-        gds_executor(caps, GdsContext{.options = options,
-                                      .metadata_client = metadata_client,
-                                      .data_client = gds_data_client,
-                                      .memory_registry = gds_memory_registry,
-                                      .cuobj_client = cuobject_client},
-                      AsyncExecutorAccessor{this}),
-        rdma_executor(options, metadata_client, rdma_data_plane_client),
-        http_executor(options, http_data_client,
-                       AsyncExecutorAccessor{this}),
-        transfer_router(options.data_path, gds_executor, rdma_executor,
-                        http_executor) {}
-
-  ClientOptions       options;
-  PlatformCapabilities caps;
-  // ChannelRegistry 必须在三个 baidu_std client 之前构造（提供 brpc::Channel*）。
-  // 真正的 brpc::Channel 在 ChannelRegistry::Initialize 时才创建；构造期
-  // baidu_std() 返回 nullptr，三个 client 接受 nullptr，等 Initialize 路径
-  // 把 channel 建好后再调它们各自的 Initialize 创建 Stub。
-  // 由于 client 持的是 brpc::Channel*（成员变量在 Impl 构造时已绑定），
-  // ChannelRegistry::Initialize 必须创建 channel 并把 unique_ptr 持有，
-  // 而 baidu_std() 返回的是 unique_ptr.get()——因此 client 持的指针必须在
-  // Initialize 后才有效。把 ChannelRegistry::Initialize 放在最早一步即可。
-  ChannelRegistry     channels;
-  MetadataClient      metadata_client;
-  GdsDataClient       gds_data_client;
-  RdmaDataPlaneClient rdma_data_plane_client;
-  HttpDataClient      http_data_client;
-  GdsMemoryRegistry   gds_memory_registry;
-  CuObjectClient      cuobject_client;
-  GdsTransferPath     gds_executor;
-  RdmaTransferPath    rdma_executor;
-  HttpTransferPath    http_executor;
-  TransferRouter      transfer_router;
-  // upload_coordinator 必须在 metadata_client + http_data_client 之后构造
-  // （它持有它们的引用），但又在 async_executor 之前；声明顺序自然满足。
-  std::unique_ptr<UploadCoordinator> upload_coordinator;
-  // async_executor 必须声明在依赖项之后：析构按声明逆序，先析构 executor
-  // 才能 join 完所有 worker，避免 worker 在 transfer_router 等已销毁后访问。
-  std::unique_ptr<ClientExecutor> async_executor;
-  bool                initialized{false};
-};
-
-ClientCore::ClientCore(ClientOptions options)
-    : impl_(std::make_unique<Impl>(std::move(options))) {}
-
-ClientCore::~ClientCore() = default;
+// ============================================================
+//  初始化：按依赖顺序启动所有组件
+// ============================================================
 
 Result<bool> ClientCore::Initialize() {
   if (impl_->initialized) {
@@ -135,6 +59,10 @@ Result<bool> ClientCore::Initialize() {
   return Result<bool>::Success(true);
 }
 
+// ============================================================
+//  关闭：逆依赖序释放资源
+// ============================================================
+
 void ClientCore::Shutdown() {
   // 先显式 Shutdown(grace=5s) 让 executor 排空 inflight bthread，再 reset。
   // C.1 后：grace 内排空返 true → 安全；超时返 false → 累计 unclean_shutdowns
@@ -152,21 +80,5 @@ void ClientCore::Shutdown() {
   impl_->rdma_executor.SetAvailable(false);
   impl_->initialized = false;
 }
-
-bool ClientCore::initialized() const { return impl_->initialized; }
-const PlatformCapabilities& ClientCore::capabilities() const { return impl_->caps; }
-const ClientOptions& ClientCore::options() const { return impl_->options; }
-const MetadataClient& ClientCore::metadata_client() const { return impl_->metadata_client; }
-const TransferRouter& ClientCore::transfer_router() const { return impl_->transfer_router; }
-
-GdsDataClient& ClientCore::gds_data_client() { return impl_->gds_data_client; }
-GdsMemoryRegistry& ClientCore::gds_memory_registry() { return impl_->gds_memory_registry; }
-const CuObjectClient& ClientCore::cuobj_client() const { return impl_->cuobject_client; }
-const GdsTransferPath& ClientCore::gds_transfer_path() const { return impl_->gds_executor; }
-const RdmaTransferPath& ClientCore::rdma_transfer_path() const { return impl_->rdma_executor; }
-const HttpTransferPath& ClientCore::http_transfer_path() const { return impl_->http_executor; }
-HttpDataClient& ClientCore::http_data_client() { return impl_->http_data_client; }
-UploadCoordinator& ClientCore::upload_coordinator() { return *impl_->upload_coordinator; }
-ClientExecutor& ClientCore::async_executor() const { return *impl_->async_executor; }
 
 }  // namespace us3_turbo_access::client
