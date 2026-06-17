@@ -425,6 +425,38 @@ sequenceDiagram
 3. **异步回调链**：`CommitPartAsync` 不阻塞等待 backend 写入完成，而是注册回调 `FinishCommitPart`。这是一个 free function（不捕获 `this`），即使 handler 在回调触发前被销毁也安全。
 4. **WritePrepared RAII**：客户端侧 `PrepareAndWrite` 返回 `WritePrepared`，析构时自动 `ReturnEp`——无论 CommitPart 成功或失败，RDMA endpoint slot 都会被正确回收。
 
+#### 4.4.1 UCX RDMA 逐步交互详解
+
+| 步骤 | 调用方 | 接口 | 关键参数 | 说明 |
+|------|--------|------|----------|------|
+| ① OpenSession | Client→GW | `RpcOpenTransferSession` | `op=PUT, data_path=kNativeRdma, expected_size=0, is_multipart_part=true` | 与 GDS 通路相同，`expected_size=0` 使网关跳过整对象 Reserve |
+| ② PrepareTransfer | Client→GW | `RdmaDataPlaneClient::PrepareTransfer` | `session_id, transfer_bytes=buffer.size` | 网关按 `transfer_bytes` 分配 pinned buffer 并注册 UCX memory region |
+| ② 返回 | GW→Client | `UcxDiscoverInfo` | `host, ucx_port, gw_raddr, gw_packed_rkey, max_msg_bytes` | `gw_raddr` 是网关 buffer 的虚拟地址；`gw_packed_rkey` 是序列化的远程访问密钥 |
+| ③ 建 ep + rkey | Client 本地 | `ucp_ep_create` + `ucp_rkey_unpack` | `ucx_port→ep, packed_rkey→rkey` | 从 EndpointPool 获取复用 slot（ep+rkey）；pool miss 时新建连接并 unpack rkey |
+| ④ RMA WRITE | Client→GW | `ucp_put_nbx` | `ep, src_buf, size, gw_raddr, gw_rkey` | 客户端主动将 `src_buf` 写入网关 `gw_raddr`；RDMA 硬件完成，网关软件不参与 |
+| ⑤ AM 通知 | Client→GW | `ucp_am_send_nbx(kAmIdWriteDone)` | `ep, am_id=kAmIdWriteDone, payload=session_id` | PUT 完成回调中发出；同一 ep 上 AM 在 PUT 后发出，UCX 保证按序到达 |
+| ⑥ CommitPart | Client→GW | `RdmaDataPlaneClient::CommitPart` | `session_id, upload_id, part_number, bytes_transferred, client_crc32c_b64` | 触发网关落盘；CRC32C 可选（base64 big-endian 编码） |
+| ⑥ 快速路径 | GW 内部 | `DoWritePartData` | — | `write_done==true` 时直接落盘，同步返回 |
+| ⑥ 慢速路径 | GW 内部 | 注册 `pending_commit` | — | `write_done==false` 时注册回调，等 `OnAmWriteDone` 触发后执行 |
+| ⑦ 落盘 | GW→Backend | `backend.WritePart` | `backend_upload_id, part_number, data` | 与 GDS/HTTP 相同的后端接口 |
+| ⑧ FinishCommitPart | GW 内部 | free function | `coordinator.RegisterPart` + `on_done(part_etag)` | 异步回调：注册 part 元数据 → 通知客户端 |
+
+#### 4.4.2 UCX vs GDS 交互对比
+
+| 维度 | GDS 通路（4.2） | UCX 通路（4.4） |
+|------|-----------------|-----------------|
+| **数据搬运方向** | **网关拉取**：`cuObjServer.handlePutObject()` 发起 RDMA READ | **客户端推送**：`ucp_put_nbx()` 发起 RMA WRITE |
+| **数据就绪通知** | 无需：RDMA READ 是同步阻塞调用，返回即数据就绪 | 需要：RMA WRITE 是单侧操作，客户端须发 AM (`kAmIdWriteDone`) 通知网关 |
+| **远程内存标识** | `rdma_token`（cuObj descriptor 字符串，编码了客户端 GPU buffer 的 RDMA 地址信息） | `gw_raddr`（网关 buffer 虚地址）+ `gw_packed_rkey`（UCX 序列化远程密钥） |
+| **内存注册** | 客户端侧：`AcquireToken` 注册 GPU buffer 到 cuObj descriptor 表 | 网关侧：`ucp_mem_map` + `ucp_rkey_pack` 注册 pinned buffer |
+| **连接管理** | 无需：每次 GdsPut 是独立 RPC，cuObjServer 内部管理 RDMA 连接 | 需要：`ucp_ep_create` 建 endpoint + `ucp_rkey_unpack` 解密远程密钥；EndpointPool 复用 ep+rkey |
+| **提交触发** | `GdsPut` RPC 本身即触发 RDMA READ + 落盘（单次 RPC 完成两步） | 分离：RMA WRITE + AM（传输）→ `CommitPart` RPC（落盘），三步串行 |
+| **同步模型** | 同步：`handlePutObject` 阻塞等待 RDMA READ 完成后返回 | 异步：`CommitPartDataAsync` 注册 `pending_commit` 回调，`OnAmWriteDone` 触发落盘 |
+| **CRC32C** | 网关侧计算，返回给客户端验证 | 客户端计算并 base64 编码传给网关，网关复算比对 |
+| **跨 chunk 累积** | MD5_CTX 按 part_number 累积（`checksum_policy=md5` 时） | 无需：每个 part 是一次完整的 RMA WRITE，无 chunk 拆分 |
+
+**核心差异总结**：GDS 通路中网关是数据搬运的**主动方**（RDMA READ 从客户端 GPU 拉），单次 `GdsPut` RPC 同步完成"拉数据 + 落盘"；UCX 通路中客户端是**主动方**（RMA WRITE 向网关推），需要"WRITE → AM 通知 → CommitPart"三步完成，但换取了异步流水线能力和 CPU 侧零拷贝（不经内核协议栈）。
+
 ---
 
 ### 4.5 UploadParts 并发上传模型
