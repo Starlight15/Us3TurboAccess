@@ -427,19 +427,20 @@ sequenceDiagram
 
 #### 4.4.1 UCX RDMA 逐步交互详解
 
-| 步骤 | 调用方 | 接口 | 关键参数 | 说明 |
-|------|--------|------|----------|------|
-| ① OpenSession | Client→GW | `RpcOpenTransferSession` | `op=PUT, data_path=kNativeRdma, expected_size=0, is_multipart_part=true` | 与 GDS 通路相同，`expected_size=0` 使网关跳过整对象 Reserve |
-| ② PrepareTransfer | Client→GW | `RdmaDataPlaneClient::PrepareTransfer` | `session_id, transfer_bytes=buffer.size` | 网关按 `transfer_bytes` 分配 pinned buffer 并注册 UCX memory region |
-| ② 返回 | GW→Client | `UcxDiscoverInfo` | `host, ucx_port, gw_raddr, gw_packed_rkey, max_msg_bytes` | `gw_raddr` 是网关 buffer 的虚拟地址；`gw_packed_rkey` 是序列化的远程访问密钥 |
-| ③ 建 ep + rkey | Client 本地 | `ucp_ep_create` + `ucp_rkey_unpack` | `ucx_port→ep, packed_rkey→rkey` | 从 EndpointPool 获取复用 slot（ep+rkey）；pool miss 时新建连接并 unpack rkey |
-| ④ RMA WRITE | Client→GW | `ucp_put_nbx` | `ep, src_buf, size, gw_raddr, gw_rkey` | 客户端主动将 `src_buf` 写入网关 `gw_raddr`；RDMA 硬件完成，网关软件不参与 |
-| ⑤ AM 通知 | Client→GW | `ucp_am_send_nbx(kAmIdWriteDone)` | `ep, am_id=kAmIdWriteDone, payload=session_id` | PUT 完成回调中发出；同一 ep 上 AM 在 PUT 后发出，UCX 保证按序到达 |
-| ⑥ CommitPart | Client→GW | `RdmaDataPlaneClient::CommitPart` | `session_id, upload_id, part_number, bytes_transferred, client_crc32c_b64` | 触发网关落盘；CRC32C 可选（base64 big-endian 编码） |
-| ⑥ 快速路径 | GW 内部 | `DoWritePartData` | — | `write_done==true` 时直接落盘，同步返回 |
-| ⑥ 慢速路径 | GW 内部 | 注册 `pending_commit` | — | `write_done==false` 时注册回调，等 `OnAmWriteDone` 触发后执行 |
-| ⑦ 落盘 | GW→Backend | `backend.WritePart` | `backend_upload_id, part_number, data` | 与 GDS/HTTP 相同的后端接口 |
-| ⑧ FinishCommitPart | GW 内部 | free function | `coordinator.RegisterPart` + `on_done(part_etag)` | 异步回调：注册 part 元数据 → 通知客户端 |
+下表步骤号与上方 Mermaid 图的 `autonumber` 一一对应：
+
+| 图步骤 | 交互 | 调用方 | 接口 | 关键参数 | 说明 |
+|--------|------|--------|------|----------|------|
+| 1–2 | OpenSession | Client⇄GW | `RpcOpenTransferSession` | `op=PUT, data_path=kNativeRdma, expected_size=0` | `expected_size=0` 使网关跳过整对象 Reserve；返回 `session_id, ticket` |
+| 3–6 | PrepareTransfer (DiscoverRdmaEndpoint) | Client⇄GW | `RdmaDataPlaneClient::PrepareTransfer` | 请求: `session_id, transfer_bytes=buffer.size` | 网关按 `transfer_bytes` 分配 pinned buffer + `ucp_mem_map` + `ucp_rkey_pack`；注册 `UcxSessionEntry`；幂等：重试时 `transfer_bytes` 必须一致 |
+| | | | 返回: `UcxDiscoverInfo` | `host, ucx_port, gw_raddr, gw_packed_rkey, max_msg_bytes` | `gw_raddr` 是网关 buffer 虚地址；`gw_packed_rkey` 是序列化远程访问密钥 |
+| 7 | 建 ep + rkey | Client 本地 | `ucp_ep_create` + `ucp_rkey_unpack` | `ucx_port→ep, packed_rkey→rkey` | 从 EndpointPool 获取复用 slot（ep+rkey）；pool miss 时新建连接并 unpack rkey |
+| 8 | RMA WRITE | Client→GW | `ucp_put_nbx` | `ep, src_buf, size, gw_raddr, gw_rkey` | 客户端主动将 `src_buf` 写入网关 `gw_raddr`；RDMA 硬件完成，网关软件不参与 |
+| 9–10 | AM 通知 + 置位 | Client→GW | `ucp_am_send_nbx(kAmIdWriteDone)` | `ep, am_id=kAmIdWriteDone, payload=session_id` | PUT 完成回调中发出；同 ep 上 AM 在 PUT 后发出，UCX 保证按序到达；网关 ProgressLoop 收到后置 `write_done=true` |
+| 11 | CommitPart | Client→GW | `RdmaDataPlaneClient::CommitPart` | `session_id, upload_id, part_number, bytes_transferred, client_crc32c_b64` | 触发网关落盘；CRC32C 可选（base64 big-endian 编码） |
+| 12–13 | CommitPartAsync + Lookup | GW 内部 | `UcxExecutor::CommitPartDataAsync` | — | 快速路径：`write_done==true` → 直接 `DoWritePartData` 同步返回；慢速路径：`write_done==false` → 注册 `pending_commit` 回调，等 `OnAmWriteDone` 触发 |
+| 14–15 | 落盘 | GW⇄BE | `backend.WritePart` | `backend_upload_id, part_number, data` | 与 GDS/HTTP 相同的后端接口；返回 `part_etag` |
+| 16–17 | FinishCommitPart + 响应 | GW→Client | free function | `coordinator.RegisterPart` + `on_done(part_etag)` | 异步回调：注册 part 元数据 → 通知客户端；不捕获 `this`，handler 销毁后仍安全 |
 
 #### 4.4.2 UCX vs GDS 交互对比
 
