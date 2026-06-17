@@ -269,149 +269,312 @@ gateway/
 
 ---
 
-## 4. 交互时序
+## 4. 交互时序：分片上传
 
-### 4.1 GDS 整对象 GET
+分片上传（Multipart Upload）是 Us3TurboAccess 大对象传输的核心能力，由 **客户端 SDK** 与 **网关** 协同完成全生命周期管理。三条数据通路（GDS / HTTP / UCX）共享同一套控制面流程（StartUpload → UploadPart×N → Complete / Abort），但 **数据面的 per-part 传输机制**截然不同：
 
-```
- Client                                  Gateway
-   │                                        │
-   │─── HeadObject(bucket, key) ──────────►│  MetadataService::Head
-   │◄── content_length, etag, version ─────│
-   │                                        │
-   │─── OpenSession(op=GET, path=GDS) ────►│  SessionOpener::Open
-   │◄── session_id, ticket, expire_at ─────│
-   │                                        │
-   │─── GdsGet(session_id, ticket,         │
-   │          rdma_token, offset, len) ────►│  PrepareGdsChunk()
-   │                                        │  ├─ 校验 gds_executor_ 可用
-   │                                        │  ├─ ResolveForGdsChunk()
-   │                                        │  ├─ 校验 rdma_token 非空
-   │                                        │  └─ BumpActive()
-   │                                        │  MetadataService::Head
-   │                                        │  GdsExecutor::GetChunk()
-   │                                        │  ├─ 从 backend 读取数据
-   │                                        │  ├─ RDMA WRITE → 客户端 GPU
-   │                                        │  └─ 计算 CRC32C
-   │◄── transfer_status, rdma_reply,       │
-   │    etag, version, crc32c ─────────────│
-```
+| 维度 | GDS 通路 | HTTP 通路 | UCX 通路 |
+|------|----------|-----------|----------|
+| **数据搬运** | cuObjServer RDMA READ（网关主动拉取 GPU buffer） | HTTP PUT body（客户端推送） | UCX RMA WRITE（客户端主动写入网关 buffer） |
+| **per-part 会话** | OpenSession(is_multipart_part=true) + 多 GdsPut chunk | 无需 OpenSession，直接 HTTP PUT | OpenSession + DiscoverRdmaEndpoint |
+| **校验** | 跨 chunk MD5 累积（checksum_policy=md5 时） | 流式 CRC32C | CRC32C（CommitPart 时比对） |
+| **part etag** | 后端 etag 或跨 chunk MD5 hex | `"{part_number}-{size}"` 标准化格式 | 后端 etag |
+| **并发友好** | 每个 chunk 独立 RDMA | 天然独立 | RMA WRITE + AM 信令天然并发 |
+| **异步回调** | 否（同步 RPC） | 否（同步 HTTP） | 是（CommitPartAsync → FinishCommitPart） |
 
-### 4.2 GDS 整对象 PUT
+---
 
-```
- Client                                  Gateway
-   │                                        │
-   │─── OpenSession(op=PUT, path=GDS,      │
-   │          expected_size=N) ────────────►│  SessionOpener::Open
-   │◄── session_id, ticket, expire_at ─────│
-   │                                        │  GdsExecutor::OnSessionOpened()
-   │                                        │  └─ backend.Reserve(size=N)
-   │                                        │
-   │─── GdsPut(session_id, ticket,         │
-   │          rdma_token, offset, len) ────►│  PrepareGdsChunk()
-   │                                        │  GdsExecutor::PutChunk()
-   │                                        │  ├─ RDMA READ ← 客户端 GPU
-   │                                        │  ├─ 计算 CRC32C
-   │                                        │  └─ backend.WriteRange()
-   │◄── transfer_status, etag, version ────│
+### 4.1 StartUpload（发起分片上传）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App as 应用
+    participant SDK as Client SDK
+    participant GW as Gateway
+    participant BE as Backend
+
+    App->>SDK: StartUpload(object, expected_total_size)
+    Note over SDK: SelectFlow(data_path) → IMultipartFlow
+    SDK->>GW: StartUpload RPC / HTTP POST /v1/uploads
+    GW->>BE: backend.StartMultipart(bucket, key, size)
+    BE-->>GW: backend_upload_id
+    Note over GW: MultipartStore::Create() → 生成 upload_id
+    GW-->>SDK: upload_id, max_part_size
+    Note over SDK: 创建 XxxMultipartSession<br/>持有 upload_id + max_part_size
+    SDK-->>App: MultipartUpload handle
 ```
 
-### 4.3 HTTP 整对象 PUT（带 CRC32C）
+**说明：**
 
-```
- Client                                  Gateway
-   │                                        │
-   │─── HTTP PUT /v1/objects/b/k ─────────►│  HttpFrontend::HandlePut
-   │    Body: <bytes>                       │  ├─ 413 上限检查
-   │    x-amz-checksum-crc32c: <base64>    │  ├─ HttpExecutor::Put()
-   │                                        │  │  ├─ 计算 CRC32C
-   │                                        │  │  ├─ 校验 client CRC == server CRC
-   │                                        │  │  └─ backend.Write()
-   │◄── 200 OK ───────────────────────────│
-   │    ETag: <etag>                        │
-   │    x-amz-checksum-crc32c: <base64>    │
-```
+1. **ID 双层隔离**：`backend_upload_id` 由后端存储生成，仅网关内部使用；`upload_id` 由 `MultipartStore` 生成并暴露给客户端，避免后端句柄格式泄漏到 wire 协议。
+2. **max_part_size 约束**：网关返回的 `max_part_size` 用于客户端侧校验——`UploadPart` 前即拒绝超大 part，避免无效 RDMA / HTTP 传输。
+3. **通路入口差异**：GDS / UCX 走 `MetadataClient` 的 RPC（`RpcCreateMultipartUpload`），HTTP 走 `HttpDataClient::StartUpload`；三者最终汇入 `MultipartCoordinator::CreateUpload`。
 
-### 4.4 UCX RDMA PUT（RMA WRITE + AM 通知）
+---
 
-```
- Client                                  Gateway
-   │                                        │
-   │─── OpenSession(op=PUT, path=RDMA) ──►│  SessionOpener::Open
-   │◄── session_id, ticket ────────────────│
-   │                                        │
-   │─── DiscoverRdmaEndpoint ─────────────►│  UcxExecutor::PrepareTransfer
-   │◄── host, ucx_port,                    │  ├─ 分配 pinned buffer
-   │    gw_raddr, gw_packed_rkey ──────────│  ├─ ucp_mem_map + ucp_rkey_pack
-   │                                        │  └─ 注册 UcxSessionEntry
-   │                                        │
-   │   ucp_ep_create(ucx_port)             │
-   │   ucp_ep_rkey_unpack(packed_rkey)     │
-   │   ucp_put_nbx(gw_raddr, data)         │  ◄─ RDMA WRITE 到网关 buffer
-   │   ucp_am_send(kAmIdWriteDone) ───────►│  ProgressLoop 收到 AM
-   │                                        │  └─ OnAmWriteDone → 置 write_done
-   │                                        │
-   │─── CommitObject(session_id,           │  UcxExecutor::CommitObject
-   │          bytes, client_crc) ──────────►│  ├─ 校验 CRC32C
-   │◄── etag, version ────────────────────│  ├─ backend.WriteRange()
-   │                                        │  └─ 释放 buffer → pool
-```
+### 4.2 UploadPart — GDS 通路（RDMA READ + 跨 chunk MD5）
 
-### 4.5 分片上传（GDS 通路）
+```mermaid
+sequenceDiagram
+    autonumber
+    participant SDK as Client SDK
+    participant GW as Gateway
+    participant cuObj as cuObjServer
+    participant BE as Backend
 
-```
- Client                                  Gateway
-   │                                        │
-   │─── StartUpload(bucket, key, GDS) ────►│  MultipartAppService::StartUpload
-   │◄── upload_id, max_part_size ──────────│  └─ backend.StartMultipart()
-   │                                        │
-   │  ┌─ for each part ──────────────────┐ │
-   │  │                                   │ │
-   │  │ OpenSession(op=PUT, GDS,          │ │  SessionOpener::Open
-   │  │   is_multipart_part=true) ────────►│  └─ 跳过整对象 Reserve
-   │  │◄── session_id, ticket ────────────│ │
-   │  │                                   │ │
-   │  │ GdsPut(session_id, rdma_token,   │ │  PrepareGdsChunk()
-   │  │   upload_id, part_number, ...) ──►│  GdsMultipartPathHandler::UploadPart
-   │  │                                   │ │  ├─ GdsExecutor::PutPart()
-   │  │                                   │ │  │  ├─ RDMA READ → pinned buffer
-   │  │                                   │ │  │  ├─ backend.WritePart()
-   │  │                                   │ │  │  └─ MD5 累积（跨 chunk）
-   │  │                                   │ │  └─ coordinator.RegisterPart()
-   │  │◄── part_etag, rdma_reply ─────────│ │
-   │  │                                   │ │
-   │  └───────────────────────────────────┘ │
-   │                                        │
-   │─── CompleteUpload(upload_id, parts[]) ►│  MultipartAppService::CompleteUpload
-   │◄── etag, version, content_length ─────│  └─ backend.CompleteMultipart()
-   │                                        │
-   │   [失败时] AbortUpload ───────────────►│  backend.AbortMultipart()
+    Note over SDK,BE: 每个 part 开一个独立 session
+    SDK->>GW: OpenSession(op=PUT, GDS, is_multipart_part=true)
+    Note over GW: 跳过整对象 backend.Reserve()
+    GW-->>SDK: session_id, ticket
+
+    SDK->>SDK: AcquireToken(buffer) — cuObj descriptor 注册
+
+    loop 大 part 自动拆为多个 chunk
+        SDK->>GW: GdsPut(session_id, ticket, rdma_token, upload_id, part_number, chunk_offset, chunk_size)
+        GW->>GW: PrepareGdsChunk() — 校验 session + token + BumpActive
+        GW->>cuObj: handlePutObject(rdma_token) — RDMA READ
+        Note over cuObj: 从客户端 GPU buffer → 网关 pinned buffer
+        cuObj-->>GW: transferred bytes
+        GW->>BE: backend.WritePart(backend_upload_id, part_number, offset, data)
+        BE-->>GW: write result
+        alt checksum_policy == "md5"
+            Note over GW: MD5_Update(ctx[part_number], data)<br/>MD5_Final(copy) → 返回中间 MD5 hex
+        end
+        GW->>GW: coordinator.RegisterPart(part_number, offset, size, etag)
+        GW-->>SDK: part_etag, rdma_reply
+    end
 ```
 
-### 4.6 会话生命周期
+**说明：**
 
+1. **per-part OpenSession**：每个 part 独立开一个 GDS session，`is_multipart_part=true` 使网关跳过整对象的 `backend.Reserve()`。session 生命周期覆盖该 part 的全部 chunk。
+2. **跨 chunk MD5 累积**：当 `checksum_policy="md5"` 时，网关在 `MultipartUpload::part_md5_ctxs` 中按 `part_number` 维护独立的 `MD5_CTX`。同一 part 的多个 chunk 通过 `MD5_Update` 累积；每次返回时 `MD5_Final` 仅作用于 CTX 的**副本**，原始 CTX 保留供后续 chunk 继续累积。最后一个 chunk 的 MD5 即为该 part 的最终 etag。
+3. **ChunkDispatcher**：客户端 `PutObjectPart` 内部由 `ChunkDispatcher` 按网关 `put_single_max_bytes` 自动拆分大 part，对调用者透明。每个 chunk 是一次独立的 `GdsPut` RPC，共享同一个 session_id。
+4. **rdma_token RAII**：`AcquireToken` 在函数返回时自动释放 cuObj descriptor，避免 GPU buffer 注销前 descriptor 泄漏。
+
+---
+
+### 4.3 UploadPart — HTTP 通路（流式 CRC32C）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant SDK as Client SDK
+    participant GW as Gateway
+    participant BE as Backend
+
+    Note over SDK,BE: 无需 OpenSession，直接 HTTP PUT
+    SDK->>GW: HTTP PUT /v1/uploads/{upload_id}/{part_number}
+    Note over SDK: Body: buffer 数据<br/>x-amz-checksum-crc32c: base64 (可选)
+    GW->>GW: coordinator.Lookup(upload_id) → MultipartUpload
+    GW->>BE: backend.WritePart(backend_upload_id, part_number, data)
+    Note over GW,BE: HttpExecutor::WritePartData<br/>逐 IOBuf block 流式计算 CRC32C
+    BE-->>GW: write result
+    alt 客户端提供了 expected_crc32c
+        GW->>GW: 比对 client_crc32c == server_crc32c
+    end
+    GW->>GW: GeneratePartEtag(part_number, size) = "N-S"
+    GW->>GW: coordinator.RegisterPart(part_number, 0, size, etag)
+    GW-->>SDK: 200 OK, part_etag, crc32c
 ```
-                          Session 状态机
 
-  ┌─────────┐   BumpActive   ┌────────┐
-  │ kOpened │───────────────►│ kActive │◄──── BumpActive
-  └────┬────┘                └──┬──┬───┘
-       │                        │  │
-       │  首次 chunk           │  │ 传输完成
-       │ (GdsGet/GdsPut/       │  │
-       │  PutChunk/GetChunk)   │  │
-       └──────────────────────┘  │
-                                 ▼
-                          ┌──────────┐
-                          │kCompleted│
-                          └──────────┘
+**说明：**
 
-  任何状态 ──AbortSession──► kFailed
-  任何状态 ──TTL 过期─────► kExpired  (SessionSweeper)
+1. **无需 OpenSession**：HTTP 通路的 part 上传不经过控制面 session，直接通过 HTTP PUT 将 body 推送到网关。这使 HTTP multipart 流程最简。
+2. **标准化 etag**：`GeneratePartEtag` 生成 `"{part_number}-{size}"` 格式的 etag，所有数据通路在 `CompleteUpload` 时用此格式做 etag 交叉校验。HTTP 通路直接使用此标准化格式；GDS 通路使用后端 etag 或跨 chunk MD5（由 `checksum_policy` 决定）。
+3. **流式 CRC32C**：`HttpExecutor::WritePartData` 逐 `butil::IOBuf` block 计算 CRC32C，避免额外内存拷贝。客户端可选在请求头中携带 `x-amz-checksum-crc32c`，网关会与之比对——不匹配则直接拒绝。
 
-  关键约束：
-  - BumpActive 刷新 last_activity_at（加锁）
-  - SessionSweeper 按 last_activity_at + TTL 判断过期
-  - AbortSession 对不存在会话视为 no-op
+---
+
+### 4.4 UploadPart — UCX 通路（RMA WRITE + AM + 异步回调）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant SDK as Client SDK
+    participant GW as Gateway
+    participant BE as Backend
+
+    Note over SDK,BE: 每个 part 开一个独立 session
+    SDK->>GW: OpenSession(op=PUT, RDMA, is_multipart_part=true)
+    GW-->>SDK: session_id, ticket
+
+    SDK->>GW: DiscoverRdmaEndpoint(session_id, bytes)
+    Note over GW: UcxExecutor::PrepareTransfer<br/>分配 pinned buffer + ucp_mem_map + ucp_rkey_pack
+    GW-->>GW: 注册 UcxSessionEntry
+    GW-->>SDK: host, ucx_port, gw_raddr, gw_packed_rkey
+
+    SDK->>SDK: ucp_ep_create(ucx_port) + ucp_rkey_unpack(packed_rkey)
+    SDK->>GW: ucp_put_nbx(gw_raddr, buffer) — RMA WRITE
+    SDK->>GW: ucp_am_send(kAmIdWriteDone) — AM 通知
+    Note over GW: ProgressLoop 收 AM → 置 write_done
+
+    SDK->>GW: CommitPart(session_id, upload_id, part_number, bytes, client_crc32c)
+    Note over GW: UcxMultipartPathHandler::CommitPartAsync (异步)
+    GW->>GW: coordinator.Lookup(upload_id)
+    GW->>BE: backend.WritePart(backend_upload_id, part_number, data)
+    BE-->>GW: part_etag
+    Note over GW: FinishCommitPart (free function)<br/>coordinator.RegisterPart<br/>回调 on_done
+    GW-->>SDK: part_etag
 ```
+
+**说明：**
+
+1. **两阶段提交**：UCX 通路的数据传输与提交是解耦的。RMA WRITE 把数据搬到网关 pinned buffer，但此时网关并不知道数据就绪——客户端必须再发 AM 通知（`kAmIdWriteDone`）和 `CommitPart` RPC 触发落盘。这种"先写后提交"模式使 RMA WRITE 可以与后续操作流水化。
+2. **AM 通知保证**：同一 endpoint 上 AM 在 RMA WRITE 之后发出，UCX 保证按序到达——因此 `CommitPart` 到达时 `write_done` 信号已就绪，无需额外 flush。
+3. **异步回调链**：`CommitPartAsync` 不阻塞等待 backend 写入完成，而是注册回调 `FinishCommitPart`。这是一个 free function（不捕获 `this`），即使 handler 在回调触发前被销毁也安全。
+4. **WritePrepared RAII**：客户端侧 `PrepareAndWrite` 返回 `WritePrepared`，析构时自动 `ReturnEp`——无论 CommitPart 成功或失败，RDMA endpoint slot 都会被正确回收。
+
+---
+
+### 4.5 UploadParts 并发上传模型
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App as 应用
+    participant MP as MultipartUpload
+    participant W0 as Worker 0
+    participant W1 as Worker 1
+    participant GW as Gateway
+
+    App->>MP: UploadParts(parts[], concurrency=2)
+    Note over MP: 捕获当前 CUDA device
+
+    par Worker 0 (std::thread)
+        W0->>W0: cudaSetDevice(device)
+        loop next_index.fetch_add() 抢 part
+            W0->>GW: UploadPart(parts[idx])
+            GW-->>W0: part_etag
+            W0->>MP: RecordSuccess(idx, outcome)
+        end
+    and Worker 1 (std::thread)
+        W1->>W1: cudaSetDevice(device)
+        loop next_index.fetch_add() 抢 part
+            W1->>GW: UploadPart(parts[idx])
+            GW-->>W1: part_etag
+            W1->>MP: RecordSuccess(idx, outcome)
+        end
+    end
+
+    Note over MP: join 所有 worker
+    alt 首个 part 失败 (first_error)
+        MP->>MP: fail-fast: 阻止后续 part 开始
+        Note over MP: 已在飞的 part 仍 join 回收
+        MP->>GW: AbortUpload(upload_id)
+        MP-->>App: first_error
+    else 全部成功
+        MP-->>App: outcomes[]
+    end
+```
+
+**说明：**
+
+1. **流水线而非批次**：Worker 完成一个 part 后立即 `fetch_add` 抢下一个——无批次边界等待。这比"每批 N 个 part 再同步"的 batch 模型吞吐更高，因为快 worker 不会等待慢 worker。
+2. **必须用 std::thread**：`UploadPart` 内部是阻塞调用（HTTP 等 TCP ACK、RDMA 等 RMA WRITE 完成、GDS 等 cuFile 返回）。若用 bthread 则阻塞会占住底层 pthread，N 个并发 worker 足以耗尽 brpc pthread pool，拖垮控制面 RPC 调度（实测 RDMA 吞吐从 ~18 GB/s 降至 ~640 MB/s）。
+3. **fail-fast 语义**：首个 part 失败后，`HasError()` 使空闲 worker 不再开始新 part；已在飞的 part 不被中断，仍 join 等回收。join 后自动 `Abort()` 释放网关侧已上传 part。
+4. **CUDA device 绑定**：每个 worker 入口 `cudaSetDevice` 绑定当前 GPU context。非 GDS 路径下该调用是 cheap no-op。
+
+---
+
+### 4.6 CompleteUpload（提交合并）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant SDK as Client SDK
+    participant GW as Gateway
+    participant BE as Backend
+
+    SDK->>GW: CompleteUpload(upload_id, [(part_no, etag), ...], data_path)
+    GW->>GW: store_.Find(upload_id)
+    GW->>GW: 校验 data_path 与 StartUpload 时一致
+    GW->>GW: CAS state: kActive → kCompleting (防重复提交)
+    GW->>GW: 快照 recorded_parts
+
+    alt S3-style 校验失败
+        Note over GW: part_number 非 1..N 连续<br/>或 etag 不匹配<br/>或非 last part < min_part_size
+        GW->>GW: state 回退 → kActive (RAII guard)
+        GW-->>SDK: BadRequest + 错误详情
+    else 校验通过
+        GW->>BE: backend.CompleteMultipart(backend_id, parts)
+        BE-->>GW: etag, version, content_length
+        GW->>GW: state → kCompleted, store_.Erase
+        GW-->>SDK: etag, version, content_length
+    end
+```
+
+**说明：**
+
+1. **data_path 校验**：`CompleteUpload` 必须走与 `StartUpload` 相同的数据通路，防止跨协议串扰（如 GDS 上传的 part 被 HTTP 通路 Complete）。
+2. **CAS 防重复提交**：`state` 从 `kActive` CAS 到 `kCompleting` 抢占 owner，重复 Complete 被拒绝。校验或提交失败时 RAII guard 自动回退到 `kActive`，避免 upload 卡死。
+3. **S3-style 校验**：part_number 必须 1..N 连续；客户端提供的 etag 必须与网关 `RegisterPart` 时记录的 etag 一致；除最后一个 part 外，其余必须 ≥ `min_part_size`。
+4. **客户端侧兜底**：SDK 在 `Complete` 失败时 best-effort 调用 `Abort()`，释放网关侧已注册的 part 和后端存储资源。
+
+---
+
+### 4.7 AbortUpload（中止与析构兜底）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant SDK as Client SDK
+    participant GW as Gateway
+    participant BE as Backend
+
+    Note over SDK: 三种触发场景
+
+    rect rgb(255, 230, 230)
+        Note over SDK: ① 显式调用 MultipartUpload.Abort()
+        SDK->>GW: AbortUpload(upload_id, data_path)
+    end
+
+    rect rgb(255, 245, 230)
+        Note over SDK: ② UploadParts 首个 part 失败 → 自动 Abort
+        SDK->>GW: AbortUpload(upload_id, data_path)
+    end
+
+    rect rgb(230, 245, 255)
+        Note over SDK: ③ ~MultipartUpload 析构时 !finished → best-effort Abort
+        SDK->>GW: AbortUpload(upload_id, data_path)
+    end
+
+    GW->>GW: 校验 data_path 一致性
+    GW->>GW: state → kAborted
+    GW->>BE: backend.AbortMultipart(backend_id)
+    GW->>GW: store_.Erase(upload_id)
+    GW-->>SDK: erased=true
+```
+
+**说明：**
+
+1. **析构兜底**：`~MultipartUpload()` 检查 `!finished`，若用户未显式 `Complete()` 或 `Abort()`，则 best-effort 调用 `Abort()`。这防止了异常退出时网关侧 part 资源泄漏。
+2. **幂等安全**：对已完成的 upload 调用 `Abort()` 返回 `Success(true)`；对不存在的 upload_id 返回 `Success(false)`（no-op）。客户端无需担心重复中止。
+3. **UploadParts 自动中止**：并发上传中任一 part 失败，join 后自动 `Abort()`，避免已上传 part 占用后端存储。
+
+---
+
+### 4.8 分片上传状态机
+
+```mermaid
+stateDiagram-v2
+    [*] --> kActive : StartUpload
+
+    kActive --> kCompleting : CompleteUpload (CAS)
+    kCompleting --> kCompleted : backend.Commit 成功
+    kCompleting --> kActive : 校验/提交失败 (RAII 回退)
+    kActive --> kAborted : AbortUpload
+    kActive --> kExpired : TTL 超时 (MultipartStore sweeper)
+
+    kCompleted --> [*]
+    kAborted --> [*]
+    kExpired --> [*]
+```
+
+**说明：**
+
+1. **kActive → kCompleting 是 CAS 原子操作**：防止两个并发 `CompleteUpload` 同时提交。只有第一个成功 CAS 的请求可以进入校验+提交流程。
+2. **RAII 回退保证**：`StateRollbackGuard` 在校验或后端提交失败时自动将 `kCompleting` 回退为 `kActive`，确保 upload 不会因临时错误而卡死在中间状态。
+3. **TTL 超时清扫**：`MultipartStore` 内置定时器，按 `last_activity_at + TTL` 判断过期。每次 `RegisterPart` 或 `Touch` 都会刷新 `last_activity_at`（加锁）。过期后自动转 `kExpired` 并从 store 移除。
+4. **终态不可逆**：`kCompleted` / `kAborted` / `kExpired` 均为终态，进入后从 store 中 `Erase`，后续相同 upload_id 的操作返回 `kNotFound`。
