@@ -3,6 +3,7 @@ add_library(us3_turbo_access_client
   ${US3_TURBO_ACCESS_RDMA_PROTO_SRCS}
   src/core/async/client_executor.cpp
   src/core/client/client.cpp
+  src/core/client/multipart_upload.cpp
   src/core/client/client_core.cpp
   src/core/client/capability_probe.cpp
   src/core/common/types.cpp
