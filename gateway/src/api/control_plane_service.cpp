@@ -72,11 +72,7 @@ Result<std::shared_ptr<core::Session>>
 ControlPlaneService::PrepareGdsChunk(
     brpc::Controller* cntl,
     const ::us3_turbo_access::gateway::GdsChunkRequest* request,
-    const char* operation_name) {
-  auto& fail_metric = (std::string_view(operation_name) == "gds_get")
-      ? common::metrics().gds_get_fail_total
-      : common::metrics().gds_put_fail_total;
-
+    bvar::Adder<std::int64_t>& fail_metric) {
   if (gds_executor_ == nullptr || !gds_executor_->available()) {
     fail_metric << 1;
     cntl->SetFailed("gds-cuobject service is not available on gateway");
@@ -191,7 +187,7 @@ void ControlPlaneService::HandleGdsGet(
   brpc::ClosureGuard done_guard(done);
   common::ScopedLatency latency(common::metrics().gds_get_latency_us);
 
-  auto session_result = PrepareGdsChunk(cntl, request, "gds_get");
+  auto session_result = PrepareGdsChunk(cntl, request, common::metrics().gds_get_fail_total);
   if (!session_result.success()) return;
   auto session = session_result.value();
 
@@ -238,7 +234,7 @@ void ControlPlaneService::HandleGdsPut(
   brpc::ClosureGuard done_guard(done);
   common::ScopedLatency latency(common::metrics().gds_put_latency_us);
 
-  auto session_result = PrepareGdsChunk(cntl, request, "gds_put");
+  auto session_result = PrepareGdsChunk(cntl, request, common::metrics().gds_put_fail_total);
   if (!session_result.success()) return;
   auto session = session_result.value();
 

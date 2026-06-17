@@ -36,7 +36,8 @@ GdsMultipartPathHandler::UploadPart(const core::Session& session,
   // 2. Pull data from client GPU via RDMA and write to backend.
   auto part_etag = executor_.PutPart(
       session, rdma_token, upload->backend_upload_id,
-      part_number, chunk_offset, chunk_size, checksum_policy);
+      part_number, chunk_offset, chunk_size, checksum_policy,
+      upload.get());
   if (!part_etag.success()) {
     return Result<GdsMultipartPartResult>::Failure(part_etag.error());
   }

@@ -4,6 +4,7 @@
 #include <string>
 
 #include <brpc/controller.h>
+#include <bvar/bvar.h>
 #include <google/protobuf/service.h>
 #include <google/protobuf/stubs/callback.h>
 
@@ -131,11 +132,11 @@ class ControlPlaneService final : public ::us3_turbo_access::gateway::ControlPla
 
   /// Common pre-checks for GDS chunk handlers: executor availability,
   /// session resolution, rdma_token, BumpActive.  On failure, records
-  /// {operation_name}_fail_total and calls cntl->SetFailed().
+  /// fail_metric and calls cntl->SetFailed().
   Result<std::shared_ptr<core::Session>> PrepareGdsChunk(
       brpc::Controller* cntl,
       const ::us3_turbo_access::gateway::GdsChunkRequest* request,
-      const char* operation_name);
+      bvar::Adder<std::int64_t>& fail_metric);
 
   core::SessionAppService&                          session_app_;
   core::MetadataService&                            metadata_;

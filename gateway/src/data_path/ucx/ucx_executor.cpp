@@ -318,6 +318,14 @@ Result<UcxDiscoverInfo> UcxExecutor::PrepareTransfer(
 
   // 幂等：已分配过直接返回
   if (entry->slot) {
+    // 校验重试时 transfer_bytes 与首次一致，防止 RDMA 写越界
+    if (entry->transfer_bytes != static_cast<std::size_t>(transfer_bytes)) {
+      return Result<UcxDiscoverInfo>::Failure(common::MakeError(
+          ErrorCode::kBadRequest,
+          "PrepareTransfer: transfer_bytes mismatch on retry: expected " +
+              std::to_string(entry->transfer_bytes) + " got " +
+              std::to_string(transfer_bytes)));
+    }
     UcxDiscoverInfo info;
     info.host           = public_host_;
     info.ucx_port       = static_cast<std::uint32_t>(opts_.listen_port);

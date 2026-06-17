@@ -49,6 +49,7 @@ MultipartStore::Find(std::string_view upload_id) const {
 
 void MultipartStore::Touch(MultipartUpload& upload,
                            std::chrono::steady_clock::time_point now) {
+  std::scoped_lock lock(upload.mu);
   upload.last_activity_at = now;
 }
 

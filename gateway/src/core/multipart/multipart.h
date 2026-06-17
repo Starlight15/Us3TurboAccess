@@ -7,6 +7,9 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <unordered_map>
+
+#include <openssl/md5.h>
 
 namespace us3_turbo_access::gateway::core::multipart {
 
@@ -43,6 +46,11 @@ struct MultipartUpload {
   State                                           state{State::kActive};
   std::chrono::steady_clock::time_point           created_at{};
   std::chrono::steady_clock::time_point           last_activity_at{};
+
+  // per-part MD5 累积 state（checksum_policy=="md5" 时使用）
+  // key = part_number，value = MD5_CTX
+  mutable std::mutex                              part_md5_mu;
+  std::unordered_map<std::uint32_t, MD5_CTX>      part_md5_ctxs;
 };
 
 }  // namespace us3_turbo_access::gateway::core::multipart

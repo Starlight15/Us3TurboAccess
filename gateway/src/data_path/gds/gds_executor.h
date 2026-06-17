@@ -8,6 +8,7 @@
 #include <spdlog/logger.h>
 
 #include "backend/backend.h"
+#include "core/multipart/multipart.h"
 #include "core/session/session.h"
 #include "data_path/data_path_executor.h"
 #include "us3_turbo_access/gateway/options.h"
@@ -95,12 +96,16 @@ class GdsExecutor final : public IDataPathExecutor {
    * Pulls @p length bytes from the client GPU and stages them via
    * `backend.WritePart(upload_id, part_number, ...)`. Returns the part's
    * etag on success.
+   *
+   * @param upload  Optional MultipartUpload for cross-chunk MD5 accumulation
+   *                (checksum_policy=="md5"). Pass nullptr for non-md5 paths.
    */
   [[nodiscard]] Result<std::string>
     PutPart(const core::Session& session, const std::string& rdma_token,
             const std::string& upload_id, std::uint32_t part_number,
             std::uint64_t object_offset, std::uint64_t length,
-            std::string_view checksum_policy);
+            std::string_view checksum_policy,
+            core::multipart::MultipartUpload* upload = nullptr);
 
  private:
   [[nodiscard]] Result<std::shared_ptr<cuObjServer>> GetServer() const;

@@ -319,14 +319,15 @@ Result<ObjectMetadata> GdsExecutor::PutChunk(const core::Session& session,
 }
 
 // Multipart PUT chunk：字节落到 backend.WritePart 而非 WriteRange。
-// checksum_policy=="md5" 时返回 chunk md5 hex；cuObj 多 chunk 切分时仅记录末段。
+// checksum_policy=="md5" 时跨 chunk 累积 MD5，返回 part 全量 MD5 etag。
 Result<std::string> GdsExecutor::PutPart(const core::Session& session,
                                          const std::string& rdma_token,
                                          const std::string& upload_id,
                                          std::uint32_t part_number,
                                          std::uint64_t object_offset,
                                          std::uint64_t length,
-                                         std::string_view checksum_policy) {
+                                         std::string_view checksum_policy,
+                                         core::multipart::MultipartUpload* upload) {
   if (length > opts_.max_chunk_bytes) {
     return Result<std::string>::Failure(common::MakeError(
         ErrorCode::kBadRequest,
@@ -389,10 +390,35 @@ Result<std::string> GdsExecutor::PutPart(const core::Session& session,
     return write;
   }
   if (checksum_policy == "md5") {
-    // Chunk-level MD5 — replaces backend's auto-etag with md5(this chunk).
-    // Note: cuObj typically splits a part into many chunk RPCs, so the
-    // recorded part etag will be md5 of the LAST chunk's bytes. Server-driven
-    // single-RPC-per-part is needed to get true part-level md5.
+    // 跨 chunk 累积 MD5：cuObj 可能将一个 part 切成多次 chunk RPC，
+    // 需要跨 chunk 维护 MD5_CTX 才能得到正确的 part-level MD5 etag。
+    if (upload != nullptr) {
+      std::scoped_lock lock(upload->part_md5_mu);
+      auto it = upload->part_md5_ctxs.find(part_number);
+      if (it == upload->part_md5_ctxs.end()) {
+        MD5_CTX ctx;
+        MD5_Init(&ctx);
+        MD5_Update(&ctx, lease.data(), bytes);
+        upload->part_md5_ctxs.emplace(part_number, ctx);
+      } else {
+        MD5_Update(&it->second, lease.data(), bytes);
+      }
+      // 拷贝 CTX → finalize 拷贝得到运行中 MD5；原 CTX 保留给后续 chunk。
+      MD5_CTX copy = upload->part_md5_ctxs.at(part_number);
+      std::array<unsigned char, MD5_DIGEST_LENGTH> digest{};
+      MD5_Final(digest.data(), &copy);
+      std::string out;
+      out.reserve(MD5_DIGEST_LENGTH * 2 + 2);
+      out.push_back('"');
+      char buf[3];
+      for (auto b : digest) {
+        std::snprintf(buf, sizeof(buf), "%02x", b);
+        out.append(buf, 2);
+      }
+      out.push_back('"');
+      return Result<std::string>::Success(std::move(out));
+    }
+    // fallback：无 upload 对象时退回单 chunk MD5（保持旧行为）
     return Result<std::string>::Success(Md5Hex(lease.data(), bytes));
   }
   return write;
