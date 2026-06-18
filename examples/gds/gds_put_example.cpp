@@ -8,6 +8,19 @@
 
 #include "us3_turbo_access/client/client.h"
 
+namespace {
+// 拆分模式下（OpenSession→proxy、GdsPut→backend）的数据面目标。
+// 未设置时回退到 endpoint，保持原单 endpoint 行为。
+[[nodiscard]] std::string EnvOr(const char* name, std::string fallback) {
+  const char* v = std::getenv(name);
+  return (v != nullptr && *v != '\0') ? std::string(v) : fallback;
+}
+[[nodiscard]] bool EnvSet(const char* name) {
+  const char* v = std::getenv(name);
+  return v != nullptr && *v != '\0';
+}
+}  // namespace
+
 namespace us3_turbo_access::client {
 namespace {
 
@@ -60,6 +73,14 @@ int main(int argc, char** argv) {
 
   ClientOptions options;
   options.endpoint = endpoint;
+  // 拆分模式：GDS_OPENSESSION_ENDPOINT（→proxy）与 GDS_GDSPUT_ENDPOINT（→backend）。
+  // 优先于 argv[1]（保留单 endpoint 默认）。
+  if (EnvSet("GDS_OPENSESSION_ENDPOINT")) {
+    options.endpoint = EnvOr("GDS_OPENSESSION_ENDPOINT", endpoint);
+  }
+  if (EnvSet("GDS_GDSPUT_ENDPOINT")) {
+    options.gds_data_endpoint = EnvOr("GDS_GDSPUT_ENDPOINT", "");
+  }
   options.client_id = "us3-gds-example";
   options.data_path = DataPath::kGdsCuObject;
 

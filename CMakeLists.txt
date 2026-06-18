@@ -170,6 +170,8 @@ add_custom_target(us3_turbo_access_rdma_data_plane_proto
 
 add_subdirectory(client)
 add_subdirectory(gateway)
+add_subdirectory(proxy)
+add_subdirectory(backend)
 
 if(US3_TURBO_ACCESS_BUILD_EXAMPLES)
   # examples/ 仅功能 / 回归用例 + 环境探测；bench/ 单独存性能压测代码

@@ -23,6 +23,11 @@ namespace us3_turbo_access::client {
  * HTTP channel 单独管理：protocol="http" 与 baidu_std 不兼容，brpc
  * 不允许一个 Channel 跑两种协议。
  *
+ * GDS 数据面拆分：当 ClientOptions::gds_data_endpoint 非空时，另建一条
+ * baidu_std channel 专供 GdsDataClient（GdsPut/GdsGet → backend），与
+ * MetadataClient 共用的 baidu_std channel（→ proxy）分离；为空时
+ * gds_data_std() 回退到 baidu_std()，行为与拆分前完全一致。
+ *
  * 生命周期：Initialize 一次成功后多 RPC 复用；Shutdown 释放底层 channel。
  */
 class ChannelRegistry {
@@ -33,8 +38,16 @@ class ChannelRegistry {
   void Shutdown();
   [[nodiscard]] bool ready() const;
 
-  /** baidu_std channel，供 MetadataClient / GdsDataClient / RdmaDataPlaneClient 共用。 */
+  /** baidu_std channel，供 MetadataClient / RdmaDataPlaneClient 共用（→ 控制面 proxy）。 */
   [[nodiscard]] brpc::Channel* baidu_std() const noexcept { return baidu_.get(); }
+
+  /**
+   * GDS 数据面 channel（→ backend）。若未单独配置 gds_data_endpoint（gds_data_
+   * 为空），回退到 baidu_std()，保持旧的单 endpoint 行为。
+   */
+  [[nodiscard]] brpc::Channel* gds_data_std() const noexcept {
+    return gds_data_ != nullptr ? gds_data_.get() : baidu_.get();
+  }
 
   [[nodiscard]] const ClientOptions& options() const noexcept { return options_; }
 
@@ -49,6 +62,7 @@ class ChannelRegistry {
   const ClientOptions&            options_;
   std::string                     endpoint_;
   std::unique_ptr<brpc::Channel>  baidu_;
+  std::unique_ptr<brpc::Channel>  gds_data_;
   std::optional<Error>            last_init_error_;
 };
 

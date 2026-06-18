@@ -42,11 +42,30 @@ Result<bool> ChannelRegistry::Initialize() {
     return Result<bool>::Failure(std::move(err));
   }
   baidu_ = std::move(baidu);
+
+  // GDS 数据面：gds_data_endpoint 非空时另建一条 channel（同 baidu_std 协议/
+  // 超时/重试），指向独立 backend 进程；为空时 gds_data_std() 回退到 baidu_
+  // (见头文件)，这里不建第二条，保持旧行为。
+  if (!options_.gds_data_endpoint.empty()) {
+    const std::string gds_endpoint = TrimTrailingSlash(options_.gds_data_endpoint);
+    auto gds = std::make_unique<brpc::Channel>();
+    brpc::ChannelOptions gds_co = co;  // 与 baidu_ 完全相同的协议/超时/重试
+    if (gds->Init(gds_endpoint.c_str(), nullptr, &gds_co) != 0) {
+      auto err = MakeError(
+          ErrorCode::kRpcError,
+          "Failed to initialize gds_data channel: " + gds_endpoint, true);
+      last_init_error_ = err;
+      return Result<bool>::Failure(std::move(err));
+    }
+    gds_data_ = std::move(gds);
+  }
+
   last_init_error_.reset();  // 成功了清掉历史错误
   return Result<bool>::Success(true);
 }
 
 void ChannelRegistry::Shutdown() {
+  gds_data_.reset();
   baidu_.reset();
   endpoint_.clear();
 }

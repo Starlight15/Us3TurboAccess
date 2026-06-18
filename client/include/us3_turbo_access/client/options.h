@@ -131,6 +131,14 @@ struct ClientOptions {
   std::chrono::milliseconds head_timeout{std::chrono::milliseconds(0)};
   std::chrono::milliseconds put_timeout{std::chrono::milliseconds(0)};
   std::chrono::milliseconds get_timeout{std::chrono::milliseconds(0)};
+  /**
+   * GDS 数据面（GdsPut）目标 "host:port"，指向独立 backend 进程。
+   * 为空则回退到 endpoint，保持旧的单 endpoint 行为（向后兼容）。
+   *   endpoint         = 控制面（proxy，OpenSession 走这里）
+   *   gds_data_endpoint = 数据面（backend，GdsPut 走这里）
+   * 仅 GDS 数据 client 使用此 channel；HTTP/RDMA 通路与 multipart 不受影响。
+   */
+  std::string gds_data_endpoint;
   /** Data transport selected for transfer operations. */
   DataPath data_path{DataPath::kGdsCuObject};
   /** Optional logger; if null, the client falls back to a null sink. */

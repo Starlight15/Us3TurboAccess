@@ -17,10 +17,13 @@ Result<bool> GdsDataClient::Initialize() {
   if (initialized()) {
     return Result<bool>::Success(true);
   }
-  auto* ch = registry_.baidu_std();
+  // GDS 数据面（GdsPut/GdsGet → backend）走独立的 gds_data channel，
+  // 与 MetadataClient（→ proxy，控制面）分离。未配置 gds_data_endpoint 时
+  // gds_data_std() 回退到 baidu_std()，行为与拆分前一致。
+  auto* ch = registry_.gds_data_std();
   if (ch == nullptr) {
     return Result<bool>::Failure(MakeInvalidArgument(
-        "GdsDataClient: shared baidu_std channel is not initialized"));
+        "GdsDataClient: gds_data channel is not initialized"));
   }
   stub_ = std::make_unique<us3_turbo_access::gateway::ControlPlaneService_Stub>(ch);
   return Result<bool>::Success(true);
