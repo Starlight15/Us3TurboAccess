@@ -24,9 +24,11 @@ add_executable(us3_turbo_access_rdma_multipart_example rdma/rdma_multipart_examp
 # ---- GDS 通路用例 (gds/*.cpp) ------------------------------------------
 
 add_executable(us3_turbo_access_gds_put_example       gds/gds_put_example.cpp)
+add_executable(us3_turbo_access_gds_put_split_example gds/gds_put_split_example.cpp)
 add_executable(us3_turbo_access_gds_multipart_example gds/gds_multipart_example.cpp)
 
 target_include_directories(us3_turbo_access_gds_put_example       PRIVATE ${CUFILE_INCLUDE_DIR})
+target_include_directories(us3_turbo_access_gds_put_split_example PRIVATE ${CUFILE_INCLUDE_DIR})
 target_include_directories(us3_turbo_access_gds_multipart_example PRIVATE ${CUFILE_INCLUDE_DIR})
 
 # ---- 共通链接 ----------------------------------------------------------
@@ -37,6 +39,7 @@ set(US3_EXAMPLE_TARGETS
     us3_turbo_access_rdma_put_example
     us3_turbo_access_rdma_multipart_example
     us3_turbo_access_gds_put_example
+    us3_turbo_access_gds_put_split_example
     us3_turbo_access_gds_multipart_example
 )
 foreach(_t IN LISTS US3_EXAMPLE_TARGETS)

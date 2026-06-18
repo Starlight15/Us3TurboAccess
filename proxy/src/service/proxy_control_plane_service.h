@@ -12,25 +12,44 @@
 namespace us3_turbo_access::proxy {
 
 /**
- * @brief 无状态控制面服务：仅实现 OpenSession（GDS 单对象 PUT），
- *        其余 7 个 RPC 一律返回 "not implemented in proxy v1"。
+ * @brief 控制面服务：实现 GDS 单对象 PUT 的完整闭环
+ *        （OpenSession → GdsPut[backend] → ReportGdsPut → CompleteUpload），
+ *        其余 6 个 RPC 一律返回 "not implemented in proxy v1"。
  *
- * v1 仅做可行性验证——发 session + ticket，不做 Reserve、不持索引、
- * 不连 cuObjServer。session 生命周期/索引留待后续。
+ * v1：发 session + ticket + data_endpoint，由 backend 回调 ReportGdsPut 标记完成，
+ *     CompleteUpload 查询结果。不连 cuObjServer，写盘由 backend 负责。
  *
- * session 凭证生成委托给 SessionManager（引用，非拥有）。
+ * session 凭证/状态由 SessionManager 持有（引用，非拥有）。
+ *
+ * 线程安全：本类无状态（gateway_id_ / backend_endpoint_ 构造后只读），所有 RPC
+ * handler 可被 brpc 并发调用；session 状态的并发安全由 SessionManager 的 mu_ 保证。
  */
 class ProxyControlPlaneService final
     : public ::us3_turbo_access::gateway::ControlPlaneService {
  public:
   ProxyControlPlaneService(std::string gateway_id,
+                           std::string backend_endpoint,
                            SessionManager& session_mgr);
 
-  // ---- 唯一真实实现的 RPC ----
+  // ---- 真实实现的 RPC ----
   void OpenSession(
       google::protobuf::RpcController* cntl,
       const ::us3_turbo_access::gateway::OpenSessionRequest* request,
       ::us3_turbo_access::gateway::OpenSessionResponse* response,
+      google::protobuf::Closure* done) override;
+
+  // backend → proxy 完成通知
+  void ReportGdsPut(
+      google::protobuf::RpcController* cntl,
+      const ::us3_turbo_access::gateway::ReportGdsPutRequest* request,
+      ::us3_turbo_access::gateway::ReportGdsPutResponse* response,
+      google::protobuf::Closure* done) override;
+
+  // client 查询 PUT 结果
+  void CompleteUpload(
+      google::protobuf::RpcController* cntl,
+      const ::us3_turbo_access::gateway::CompleteUploadRequest* request,
+      ::us3_turbo_access::gateway::CompleteUploadResponse* response,
       google::protobuf::Closure* done) override;
 
   // ---- v1 占位：不实现 ----
@@ -59,11 +78,6 @@ class ProxyControlPlaneService final
                    ::us3_turbo_access::gateway::StartUploadResponse* response,
                    google::protobuf::Closure* done) override;
 
-  void CompleteUpload(google::protobuf::RpcController* cntl,
-                      const ::us3_turbo_access::gateway::CompleteUploadRequest* request,
-                      ::us3_turbo_access::gateway::CompleteUploadResponse* response,
-                      google::protobuf::Closure* done) override;
-
   void AbortUpload(google::protobuf::RpcController* cntl,
                    const ::us3_turbo_access::gateway::AbortUploadRequest* request,
                    ::us3_turbo_access::gateway::AbortUploadResponse* response,
@@ -71,6 +85,7 @@ class ProxyControlPlaneService final
 
  private:
   std::string gateway_id_;
+  std::string backend_endpoint_;  // 回填进 OpenSessionResponse.data_endpoint
   SessionManager& session_mgr_;
 };
 

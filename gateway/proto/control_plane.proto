@@ -29,13 +29,15 @@ message OpenSessionResponse {
   string session_id = 2;
   string ticket = 3;
   string gateway_id = 4;
-  // 5 was gateway_endpoint  (removed: client never reads; data path reuses control channel)
+  // backend 数据面地址，如 "192.168.1.198:9200"，client 据此直连 GdsPut。
+  // 复用历史 reserved 的 field 5（原 gateway_endpoint 已移除）。
+  string data_endpoint = 5;
   // 6 was channel_id        (removed: just echoed from request)
   // 7 was async_handle      (removed: gateway-generated but client never reads)
   string expire_at = 8;
   // 9  was repeated ChunkPlanItem chunk_plan  (removed: client never enforces)
   // 10 was map<string,string> rdma_parameters (removed: GDS uses cuObj; native-RDMA not impl)
-  reserved 5, 6, 7, 9, 10;
+  reserved 6, 7, 9, 10;
 }
 
 message HeadObjectRequest {
@@ -81,6 +83,8 @@ message GdsChunkResponse {
   // GET 路径让 client 做 end-to-end 校验；PUT 路径用于响应回写。
   // 0 表示未计算（向后兼容）。
   uint32 crc32c = 7;
+  // GdsPut 实际接收到的字节数（backend 数据面 RDMA-READ 拉到的字节数）。
+  uint64 bytes_received = 8;
 }
 
 message StartUploadRequest {
@@ -133,6 +137,20 @@ message AbortSessionResponse {
   bool erased = 1;
 }
 
+// backend 完成 RDMA-READ 后通知 proxy（control-plane）数据已就位。
+// proxy 据 session_id 标记 session 为 completed，供后续 CompleteUpload 查询。
+message ReportGdsPutRequest {
+  string session_id        = 1;
+  string etag              = 2;
+  uint32 crc32c            = 3;
+  uint64 bytes_transferred = 4;
+}
+
+message ReportGdsPutResponse {
+  // false 表示 session 不存在或已过期。
+  bool accepted = 1;
+}
+
 service ControlPlaneService {
   rpc OpenSession(OpenSessionRequest)
       returns (OpenSessionResponse);
@@ -147,4 +165,7 @@ service ControlPlaneService {
   rpc StartUpload(StartUploadRequest) returns (StartUploadResponse);
   rpc CompleteUpload(CompleteUploadRequest) returns (CompleteUploadResponse);
   rpc AbortUpload(AbortUploadRequest) returns (AbortUploadResponse);
+
+  // backend → proxy 完成通知（GDS PUT 链路闭环）。
+  rpc ReportGdsPut(ReportGdsPutRequest) returns (ReportGdsPutResponse);
 }

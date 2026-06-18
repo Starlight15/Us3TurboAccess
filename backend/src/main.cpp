@@ -16,6 +16,9 @@ DEFINE_string(bind_host, "0.0.0.0", "Bind host for brpc and cuObjServer");
 DEFINE_string(public_host, "127.0.0.1", "Public host (unused in v1)");
 DEFINE_int32(num_threads, 4, "brpc worker thread count");
 DEFINE_string(backend_id, "backend-0", "Backend identifier");
+DEFINE_string(proxy_endpoint, "192.168.1.198:9100",
+              "Proxy control plane endpoint for completion notification "
+              "(empty disables ReportGdsPut)");
 
 namespace {
 
@@ -45,7 +48,8 @@ int main(int argc, char** argv) {
   }
 
   us3_turbo_access::backend::BackendDataPlaneService service(sink,
-                                                             FLAGS_backend_id);
+                                                             FLAGS_backend_id,
+                                                             FLAGS_proxy_endpoint);
 
   brpc::Server server;
   if (server.AddService(&service, brpc::SERVER_DOESNT_OWN_SERVICE) != 0) {

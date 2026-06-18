@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -16,7 +17,10 @@ namespace {
 constexpr std::string_view kNotImplemented =
     "backend v1: only single-object GdsPut";
 
-[[nodiscard]] std::string Crc32cHex(std::uint32_t crc) {
+// 通知 proxy 的超时（仅 warn 不影响 GdsPut 返回）。
+constexpr int kNotifyTimeoutMs = 1000;
+
+[[nodiscard]] std::string BuildEtag(std::uint32_t crc) {
   char buf[9] = {};
   std::snprintf(buf, sizeof(buf), "%08x", crc);
   return std::string(buf);
@@ -29,9 +33,29 @@ constexpr std::string_view kNotImplemented =
 
 }  // namespace
 
-BackendDataPlaneService::BackendDataPlaneService(BackendGdsSink& sink,
-                                                 std::string gateway_id)
-    : sink_(sink), gateway_id_(std::move(gateway_id)) {}
+BackendDataPlaneService::BackendDataPlaneService(
+    BackendGdsSink& sink,
+    std::string gateway_id,
+    const std::string& proxy_endpoint)
+    : sink_(sink), gateway_id_(std::move(gateway_id)) {
+  if (!proxy_endpoint.empty()) {
+    auto channel = std::make_shared<brpc::Channel>();
+    brpc::ChannelOptions options;
+    options.timeout_ms = kNotifyTimeoutMs;
+    options.connection_type = brpc::CONNECTION_TYPE_SINGLE;
+    if (channel->Init(proxy_endpoint.c_str(), nullptr, &options) != 0) {
+      spdlog::warn("backend: failed to init proxy channel to {}, "
+                   "ReportGdsPut disabled", proxy_endpoint);
+      return;
+    }
+    proxy_channel_ = std::move(channel);
+    proxy_stub_ = std::make_unique<
+        ::us3_turbo_access::gateway::ControlPlaneService_Stub>(
+        proxy_channel_.get());
+    spdlog::info("backend: ReportGdsPut will notify proxy at {}",
+                 proxy_endpoint);
+  }
+}
 
 void BackendDataPlaneService::GdsPut(
     google::protobuf::RpcController* cntl_base,
@@ -68,17 +92,30 @@ void BackendDataPlaneService::GdsPut(
     return;
   }
 
-  // 合成响应：etag 用 crc32c hex（长度 0 时给 "discard-0"）；version="1"。
-  const std::string etag = (outcome.bytes_transferred == 0U)
-                               ? std::string("discard-0")
-                               : Crc32cHex(outcome.crc32c);
-  response->set_selected_gateway(gateway_id_);
-  response->set_gateway_id(gateway_id_);
-  response->set_transfer_status("completed");
-  response->set_rdma_reply("gds-cuobject-rdma-read");
+  // 合成响应：skill.md §3.3 只返回 etag + bytes_received。
+  const std::string etag = BuildEtag(outcome.crc32c);
   response->set_etag(etag);
-  response->set_version("1");
-  response->set_crc32c(outcome.crc32c);
+  response->set_bytes_received(outcome.bytes_transferred);
+
+  // 通知 proxy 数据传输完成（异步、仅 warn，不影响对 client 的返回）。
+  if (proxy_stub_ != nullptr) {
+    brpc::Controller notify_cntl;
+    notify_cntl.set_timeout_ms(kNotifyTimeoutMs);
+    ::us3_turbo_access::gateway::ReportGdsPutRequest notify_req;
+    notify_req.set_session_id(request->session_id());
+    notify_req.set_etag(etag);
+    notify_req.set_crc32c(outcome.crc32c);
+    notify_req.set_bytes_transferred(outcome.bytes_transferred);
+    ::us3_turbo_access::gateway::ReportGdsPutResponse notify_resp;
+    proxy_stub_->ReportGdsPut(&notify_cntl, &notify_req, &notify_resp, nullptr);
+    if (notify_cntl.Failed()) {
+      spdlog::warn("backend: failed to notify proxy of GdsPut completion: {}",
+                   notify_cntl.ErrorText());
+    } else if (!notify_resp.accepted()) {
+      spdlog::warn("backend: proxy rejected ReportGdsPut for session_id={}",
+                   request->session_id());
+    }
+  }
 
   spdlog::info("backend.gdsput object={} bytes={} crc32c={:x}", object_id,
                outcome.bytes_transferred, outcome.crc32c);
@@ -95,7 +132,7 @@ void BackendDataPlaneService::OpenSession(
     google::protobuf::Closure* done) {
   brpc::ClosureGuard done_guard(done);
   auto* cntl = static_cast<brpc::Controller*>(cntl_base);
-  cntl->SetFailed(std::string(kNotImplemented));
+  cntl->SetFailed(brpc::ENOMETHOD, "%s", std::string(kNotImplemented).c_str());
 }
 
 void BackendDataPlaneService::HeadObject(
@@ -105,7 +142,7 @@ void BackendDataPlaneService::HeadObject(
     google::protobuf::Closure* done) {
   brpc::ClosureGuard done_guard(done);
   auto* cntl = static_cast<brpc::Controller*>(cntl_base);
-  cntl->SetFailed(std::string(kNotImplemented));
+  cntl->SetFailed(brpc::ENOMETHOD, "%s", std::string(kNotImplemented).c_str());
 }
 
 void BackendDataPlaneService::GdsGet(
@@ -115,7 +152,7 @@ void BackendDataPlaneService::GdsGet(
     google::protobuf::Closure* done) {
   brpc::ClosureGuard done_guard(done);
   auto* cntl = static_cast<brpc::Controller*>(cntl_base);
-  cntl->SetFailed(std::string(kNotImplemented));
+  cntl->SetFailed(brpc::ENOMETHOD, "%s", std::string(kNotImplemented).c_str());
 }
 
 void BackendDataPlaneService::AbortSession(
@@ -125,7 +162,7 @@ void BackendDataPlaneService::AbortSession(
     google::protobuf::Closure* done) {
   brpc::ClosureGuard done_guard(done);
   auto* cntl = static_cast<brpc::Controller*>(cntl_base);
-  cntl->SetFailed(std::string(kNotImplemented));
+  cntl->SetFailed(brpc::ENOMETHOD, "%s", std::string(kNotImplemented).c_str());
 }
 
 void BackendDataPlaneService::StartUpload(
@@ -135,7 +172,7 @@ void BackendDataPlaneService::StartUpload(
     google::protobuf::Closure* done) {
   brpc::ClosureGuard done_guard(done);
   auto* cntl = static_cast<brpc::Controller*>(cntl_base);
-  cntl->SetFailed(std::string(kNotImplemented));
+  cntl->SetFailed(brpc::ENOMETHOD, "%s", std::string(kNotImplemented).c_str());
 }
 
 void BackendDataPlaneService::CompleteUpload(
@@ -145,7 +182,7 @@ void BackendDataPlaneService::CompleteUpload(
     google::protobuf::Closure* done) {
   brpc::ClosureGuard done_guard(done);
   auto* cntl = static_cast<brpc::Controller*>(cntl_base);
-  cntl->SetFailed(std::string(kNotImplemented));
+  cntl->SetFailed(brpc::ENOMETHOD, "%s", std::string(kNotImplemented).c_str());
 }
 
 void BackendDataPlaneService::AbortUpload(
@@ -155,7 +192,7 @@ void BackendDataPlaneService::AbortUpload(
     google::protobuf::Closure* done) {
   brpc::ClosureGuard done_guard(done);
   auto* cntl = static_cast<brpc::Controller*>(cntl_base);
-  cntl->SetFailed(std::string(kNotImplemented));
+  cntl->SetFailed(brpc::ENOMETHOD, "%s", std::string(kNotImplemented).c_str());
 }
 
 }  // namespace us3_turbo_access::backend

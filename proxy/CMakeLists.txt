@@ -1,7 +1,7 @@
 add_executable(us3_turbo_access_proxy
   ${US3_TURBO_ACCESS_CONTROL_PROTO_SRCS}
   src/main.cpp
-  src/proxy_control_plane_service.cpp
+  src/service/proxy_control_plane_service.cpp
   src/session/session_manager.cpp)
 
 add_dependencies(us3_turbo_access_proxy
