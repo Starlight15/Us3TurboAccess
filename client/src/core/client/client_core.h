@@ -5,28 +5,27 @@
 #include "us3_turbo_access/client/options.h"
 #include "us3_turbo_access/client/result.h"
 
-// ---- Impl 需要的完整类型定义 ----
-#include "client/src/control/metadata_client.h"
-#include "client/src/core/async/client_executor.h"
-#include "client/src/core/client/capability_probe.h"
-#include "client/src/core/common/channel_registry.h"
-#include "client/src/core/gds/gds_context.h"
-#include "client/src/core/gds/gds_transfer_path.h"
-#include "client/src/core/rdma/rdma_transfer_path.h"
-#include "client/src/core/routing/transfer_router.h"
-#include "client/src/core/upload/upload_coordinator.h"
-#include "client/src/data/gds_data_client.h"
-#include "client/src/data/rdma_data_plane_client.h"
-#include "client/src/transports/gds/cuobject_client.h"
-#include "client/src/transports/gds/gds_memory_registry.h"
-
 namespace us3_turbo_access::client {
+
+// 组件类型的完整定义全部收敛到 client_core.cpp 的 ClientCore::Impl 中；
+// 这里只前向声明，避免把 cuObject / UCX / 各类 client 的重型 header 泄漏给
+// 所有 #include 本文件的 TU。PlatformCapabilities 由 options.h→types.h 提供。
+class MetadataClient;
+class TransferRouter;
+class GdsDataClient;
+class GdsMemoryRegistry;
+class CuObjectClient;
+class GdsTransferPath;
+class RdmaTransferPath;
+class UploadCoordinator;
+class ClientExecutor;
 
 // ClientCore 是内部装配体：拥有所有组件实例并管理生命周期，仅供 Client 使用。
 class ClientCore {
  public:
   explicit ClientCore(ClientOptions options);
-  ~ClientCore() = default;
+  // Impl 在本 header 中不完整，析构必须在 .cpp（Impl 完整可见处）定义。
+  ~ClientCore();
 
   ClientCore(const ClientCore&) = delete;
   ClientCore& operator=(const ClientCore&) = delete;
@@ -66,74 +65,5 @@ class ClientCore {
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };
-
-// ============================================================
-//  ClientCore::Impl — 内部组件装配
-// ============================================================
-
-struct ClientCore::Impl {
-  /* HttpTransferPath 需要并发 GET 的 worker 池；它在 Initialize 才被创建，
-   * 而 Impl 构造期 async_executor 还是空。这里给一个稳定的 functor，每次
-   * 调用直接从 Impl 取最新 async_executor 指针，未就绪自动降级单连接。*/
-  struct AsyncExecutorAccessor {
-    Impl* impl;
-    ClientExecutor* operator()() const { return impl->async_executor.get(); }
-  };
-
-  explicit Impl(ClientOptions opts)
-      : options(std::move(opts)),
-        caps(DetectPlatformCapabilities(options)),
-        channels(options),
-        metadata_client(channels, options),
-        gds_data_client(channels, options),
-        rdma_data_plane_client(channels, options),
-        gds_executor(caps, GdsContext{.options = options,
-                                      .metadata_client = metadata_client,
-                                      .data_client = gds_data_client,
-                                      .memory_registry = gds_memory_registry,
-                                      .cuobj_client = cuobject_client},
-                      AsyncExecutorAccessor{this}),
-        rdma_executor(options, metadata_client, rdma_data_plane_client),
-        transfer_router(options.data_flow, gds_executor, rdma_executor) {}
-
-  ClientOptions       options;
-  PlatformCapabilities caps;
-  ChannelRegistry     channels;
-  MetadataClient      metadata_client;
-  GdsDataClient       gds_data_client;
-  RdmaDataPlaneClient rdma_data_plane_client;
-  GdsMemoryRegistry   gds_memory_registry;
-  CuObjectClient      cuobject_client;
-  GdsTransferPath     gds_executor;
-  RdmaTransferPath    rdma_executor;
-  TransferRouter      transfer_router;
-  // upload_coordinator 必须在 metadata_client + http_data_client 之后构造
-  // （它持有它们的引用），但又在 async_executor 之前；声明顺序自然满足。
-  std::unique_ptr<UploadCoordinator> upload_coordinator;
-  // async_executor 必须声明在依赖项之后：析构按声明逆序，先析构 executor
-  // 才能 join 完所有 worker，避免 worker 在 transfer_router 等已销毁后访问。
-  std::unique_ptr<ClientExecutor> async_executor;
-  bool                initialized{false};
-};
-
-// ============================================================
-//  内联构造函数 + 访问器（定义在 Impl 完整可见之后）
-// ============================================================
-
-inline ClientCore::ClientCore(ClientOptions options)
-    : impl_(std::make_unique<Impl>(std::move(options))) {}
-
-inline bool ClientCore::initialized() const { return impl_->initialized; }
-inline const PlatformCapabilities& ClientCore::capabilities() const { return impl_->caps; }
-inline const ClientOptions& ClientCore::options() const { return impl_->options; }
-inline const MetadataClient& ClientCore::metadata_client() const { return impl_->metadata_client; }
-inline const TransferRouter& ClientCore::transfer_router() const { return impl_->transfer_router; }
-inline GdsDataClient& ClientCore::gds_data_client() { return impl_->gds_data_client; }
-inline GdsMemoryRegistry& ClientCore::gds_memory_registry() { return impl_->gds_memory_registry; }
-inline const CuObjectClient& ClientCore::cuobj_client() const { return impl_->cuobject_client; }
-inline const GdsTransferPath& ClientCore::gds_transfer_path() const { return impl_->gds_executor; }
-inline const RdmaTransferPath& ClientCore::rdma_transfer_path() const { return impl_->rdma_executor; }
-inline UploadCoordinator& ClientCore::upload_coordinator() { return *impl_->upload_coordinator; }
-inline ClientExecutor& ClientCore::async_executor() const { return *impl_->async_executor; }
 
 }  // namespace us3_turbo_access::client
