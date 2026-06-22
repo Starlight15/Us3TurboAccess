@@ -43,10 +43,10 @@ class MetadataClient {
   [[nodiscard]] Result<CompleteUploadOutcome>
     RpcCompleteMultipartUpload(const std::string& upload_id,
                                const std::vector<PartCompletion>& parts,
-                               DataPath data_path) const;
+                               DataFlow data_flow) const;
   [[nodiscard]] Result<bool>
     RpcAbortMultipartUpload(const std::string& upload_id,
-                            DataPath data_path) const;
+                            DataFlow data_flow) const;
 
   /**
    * 通知 server 立即 mark 该 session 为 failed（best-effort）。

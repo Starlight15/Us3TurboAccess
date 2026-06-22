@@ -4,7 +4,7 @@
 #include <memory>
 #include <utility>
 
-namespace us3_turbo_access::gateway::data_path::ucx {
+namespace us3_turbo_access::gateway::data_flow::ucx {
 
 struct UcxSessionEntry;
 
@@ -39,4 +39,4 @@ class UcxSessionEntryGuard {
   std::function<void(std::shared_ptr<UcxSessionEntry>)>         release_fn_;
 };
 
-}  // namespace us3_turbo_access::gateway::data_path::ucx
+}  // namespace us3_turbo_access::gateway::data_flow::ucx

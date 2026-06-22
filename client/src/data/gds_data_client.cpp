@@ -51,7 +51,7 @@ Result<us3_turbo_access::gateway::GdsChunkResponse> GdsDataClient::GdsChunk(
   rpc_request.set_transfer_ticket(request.transfer_ticket);
   rpc_request.set_bucket(request.object.object.bucket);
   rpc_request.set_object_key(request.object.object.key);
-  rpc_request.set_data_path(std::string(ToString(request.object.data_path)));
+  rpc_request.set_data_flow(std::string(ToString(request.object.data_flow)));
   rpc_request.set_buffer_type(std::string(ToString(request.object.buffer_type)));
   rpc_request.set_checksum_policy(request.object.checksum_policy);
   rpc_request.set_chunk_offset(request.chunk_offset);
@@ -71,7 +71,7 @@ Result<us3_turbo_access::gateway::GdsChunkResponse> GdsDataClient::GdsChunk(
   }
 
   auto status = CheckRpcFailure(controller, "Failed to execute GDS chunk RPC",
-                                request.object.data_path, request.request_id);
+                                request.object.data_flow, request.request_id);
   if (!status.success()) {
     return Result<us3_turbo_access::gateway::GdsChunkResponse>::Failure(status.error());
   }

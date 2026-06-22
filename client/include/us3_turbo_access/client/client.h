@@ -187,20 +187,20 @@ class Client {
   /**
    * @brief Downloads the object (or a range of it) into the caller's buffer.
    *
-   * @param request RequestOptions specifying object id, offset, length and
+   * @param request GetObjectRequest specifying object id, offset, length and
    *                progress callback.
    * @param buffer  Destination buffer; must be at least request.length bytes.
    */
-  [[nodiscard]] Result<TransferOutcome> GetObject(const RequestOptions& request,
+  [[nodiscard]] Result<TransferOutcome> GetObject(const GetObjectRequest& request,
                                                   MutableBufferView buffer) const;
 
   /**
    * @brief Uploads the contents of @p buffer as the named object.
    *
-   * @param request RequestOptions identifying the destination object.
+   * @param request PutObjectRequest identifying the destination object.
    * @param buffer  Source buffer; must remain valid until this call returns.
    */
-  [[nodiscard]] Result<TransferOutcome> PutObject(const RequestOptions& request,
+  [[nodiscard]] Result<TransferOutcome> PutObject(const PutObjectRequest& request,
                                                   ConstBufferView buffer) const;
 
   /**
@@ -219,7 +219,7 @@ class Client {
    *       completes; only the view is copied, the underlying memory is not.
    */
   [[nodiscard]] std::future<Result<TransferOutcome>>
-    GetObjectAsync(const RequestOptions& request, MutableBufferView buffer) const;
+    GetObjectAsync(const GetObjectRequest& request, MutableBufferView buffer) const;
 
   /**
    * @brief Asynchronous variant of PutObject.
@@ -228,7 +228,7 @@ class Client {
    *       completes; only the view is copied, the underlying memory is not.
    */
   [[nodiscard]] std::future<Result<TransferOutcome>>
-    PutObjectAsync(const RequestOptions& request, ConstBufferView buffer) const;
+    PutObjectAsync(const PutObjectRequest& request, ConstBufferView buffer) const;
 
   /**
    * @brief Initiates a multipart upload.

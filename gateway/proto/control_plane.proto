@@ -10,7 +10,7 @@ message OpenSessionRequest {
   string bucket = 3;
   string object_key = 4;
   string op_type = 5;
-  string data_path = 6;
+  string data_flow = 6;
   string buffer_type = 7;
   // 8 was channel_id        (removed: just echoed, never consumed)
   uint64 offset = 9;
@@ -58,7 +58,7 @@ message GdsChunkRequest {
   string transfer_ticket = 3;
   string bucket = 4;
   string object_key = 5;
-  string data_path = 6;
+  string data_flow = 6;
   string buffer_type = 7;
   string checksum_policy = 8;
   uint64 chunk_offset = 9;
@@ -91,7 +91,7 @@ message StartUploadRequest {
   string bucket = 1;
   string object_key = 2;
   uint64 expected_total_size = 3;       // optional hint; 0 == unknown
-  string data_path = 4;
+  string data_flow = 4;
   string idempotency_key = 5;
 }
 
@@ -108,7 +108,7 @@ message PartEtag {
 message CompleteUploadRequest {
   string upload_id = 1;
   repeated PartEtag parts = 2;
-  string data_path = 3;  // 调用方通道标识，用于校验与 StartUpload 一致
+  string data_flow = 3;  // 调用方通道标识,用于校验与 StartUpload 一致
 }
 
 message CompleteUploadResponse {
@@ -119,7 +119,7 @@ message CompleteUploadResponse {
 
 message AbortUploadRequest {
   string upload_id = 1;
-  string data_path = 2;  // 调用方通道标识，用于校验与 StartUpload 一致
+  string data_flow = 2;  // 调用方通道标识，用于校验与 StartUpload 一致
 }
 
 message AbortUploadResponse {

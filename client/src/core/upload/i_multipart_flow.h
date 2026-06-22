@@ -63,7 +63,7 @@ class IMultipartSession {
 // 打开链路上的 multipart 会话（control plane RPC + 可能的端点准备），
 // 然后把后续所有 part 级操作交给 IMultipartSession。
 //
-// UploadCoordinator 按 DataPath 选出对应 flow；flow 的生命周期与 Client 绑定。
+// UploadCoordinator 按 DataFlow 选出对应 flow；flow 的生命周期与 Client 绑定。
 class IMultipartFlow {
  public:
   virtual ~IMultipartFlow() = default;

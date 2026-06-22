@@ -8,7 +8,7 @@
 #include "core/multipart/multipart_coordinator.h"
 #include "data_path/gds/gds_executor.h"
 
-namespace us3_turbo_access::gateway::data_path::gds {
+namespace us3_turbo_access::gateway::data_flow::gds {
 
 GdsMultipartPathHandler::GdsMultipartPathHandler(
     GdsExecutor& executor,
@@ -55,4 +55,4 @@ GdsMultipartPathHandler::UploadPart(const core::Session& session,
   return Result<GdsMultipartPartResult>::Success(std::move(result));
 }
 
-}  // namespace us3_turbo_access::gateway::data_path::gds
+}  // namespace us3_turbo_access::gateway::data_flow::gds

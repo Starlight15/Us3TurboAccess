@@ -10,7 +10,7 @@
 #include <bvar/bvar.h>
 #include <cuobjserver.h>
 
-namespace us3_turbo_access::gateway::data_path::gds {
+namespace us3_turbo_access::gateway::data_flow::gds {
 
 /**
  * @brief 一段已经 pin 给 cuObjServer 并注册过 RDMA MR 的 host buffer。
@@ -106,4 +106,4 @@ class PinnedBufferPool {
   bvar::Adder<std::int64_t>           oversize_total_{"gateway_pinned_buffer_pool_oversize_total"};
 };
 
-}  // namespace us3_turbo_access::gateway::data_path::gds
+}  // namespace us3_turbo_access::gateway::data_flow::gds

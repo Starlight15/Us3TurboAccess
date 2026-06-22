@@ -85,7 +85,7 @@ int main(int argc, char** argv) {
   ClientOptions options;
   options.endpoint  = a.endpoint;
   options.client_id = "us3-rdma-multipart-bench";
-  options.data_path = DataPath::kNativeRdma;
+  options.data_flow = DataFlow::CPUDirect;
   options.async_worker_threads = a.threads;
   Client client(std::move(options));
   if (auto init = client.Initialize(); !init.success()) {

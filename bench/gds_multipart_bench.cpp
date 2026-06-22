@@ -112,7 +112,7 @@ int main(int argc, char** argv) {
   ClientOptions options;
   options.endpoint  = a.endpoint;
   options.client_id = "us3-gds-multipart-bench";
-  options.data_path = DataPath::kGdsCuObject;
+  options.data_flow = DataFlow::GPUDirect;
   options.async_worker_threads = a.threads;
   Client client(std::move(options));
   if (auto init = client.Initialize(); !init.success()) {

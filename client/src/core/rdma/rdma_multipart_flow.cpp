@@ -29,11 +29,9 @@ class RdmaMultipartSession final : public IMultipartSession {
                                      std::uint64_t object_offset,
                                      const std::string& checksum_policy,
                                      ConstBufferView buffer) override {
-    RequestOptions request;
+    PutObjectRequest request;
     request.object          = object_;
-    request.offset          = object_offset;
     request.checksum_policy = checksum_policy;
-    request.length = buffer.size;  // server BindSession 需按 length 预分配 buffer。
     return transfer_path_.PutObjectPart(request, buffer, upload_id_, part_number);
   }
 
@@ -43,14 +41,14 @@ class RdmaMultipartSession final : public IMultipartSession {
     rpc_parts.reserve(parts.size());
     for (const auto& p : parts) rpc_parts.push_back({p.part_number, p.etag});
     auto out = metadata_.RpcCompleteMultipartUpload(
-        upload_id_, rpc_parts, DataPath::kNativeRdma);
+        upload_id_, rpc_parts, DataFlow::CPUDirect);
     if (!out.success()) return Result<CompleteResult>::Failure(out.error());
     return Result<CompleteResult>::Success(
         {out.value().etag, out.value().version, out.value().content_length});
   }
 
   Result<bool> Abort() override {
-    return metadata_.RpcAbortMultipartUpload(upload_id_, DataPath::kNativeRdma);
+    return metadata_.RpcAbortMultipartUpload(upload_id_, DataFlow::CPUDirect);
   }
 
  private:

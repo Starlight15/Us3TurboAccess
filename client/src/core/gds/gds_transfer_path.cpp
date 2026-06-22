@@ -17,36 +17,55 @@ namespace {
 constexpr std::uint64_t kGpuPageSize = 4096;
 
 [[nodiscard]] Error MakeGdsUnsupportedError() {
-  return MakeUnsupportedPath(DataPath::kGdsCuObject,
+  return MakeUnsupportedPath(DataFlow::GPUDirect,
                              "The current environment does not support the GDS channel");
 }
 
-// B.5 共享 Preflight：与 HTTP/RDMA 同款风格。GDS 要求 buffer.type=kCudaDevice。
+// B.5 共享 Preflight：GDS 要求 buffer.type=kCudaDevice。
 [[nodiscard]] Result<bool> PreflightGds(bool available, BufferType buffer_type) {
   return GdsTransferPath::CommonPreflight(
-      DataPath::kGdsCuObject, "GDS (requires kCudaDevice GPU buffer)",
+      DataFlow::GPUDirect, "GDS (requires kCudaDevice GPU buffer)",
       available, buffer_type, BufferType::kCudaDevice);
 }
 
-// 注册显存并向 gateway 协商出一个 TransferSession。
-// memory_registry 验证 buffer 类型 / 非空，但 descriptor 字段已从 wire 协议
-// 移除（gateway 用不到），所以这里只走校验。
 template <typename BufferView>
-[[nodiscard]] Result<TransferSession> OpenSession(const GdsContext& context, OperationType op,
-                                                   const RequestOptions& request,
-                                                   BufferView buffer) {
-  auto registration = context.memory_registry.Register(op, buffer);
+[[nodiscard]] Result<TransferSession> OpenSessionForGet(
+    const GdsContext& context, const GetObjectRequest& request, BufferView buffer) {
+  auto registration = context.memory_registry.Register(OperationType::kGet, buffer);
   if (!registration.success()) {
     return Result<TransferSession>::Failure(registration.error());
   }
-
   auto open_request = MakeSessionHandshake(context.options, SessionPlan{
-      .operation = op,
-      .request = request,
+      .operation = OperationType::kGet,
+      .object = request.object,
+      .offset = request.offset,
+      .length = request.length,
+      .timeout = request.timeout,
       .buffer_type = buffer.type,
-      .path = DataPath::kGdsCuObject,
+      .path = DataFlow::GPUDirect,
   });
+  auto open_response = context.metadata_client.RpcOpenTransferSession(open_request);
+  if (!open_response.success()) {
+    return Result<TransferSession>::Failure(open_response.error());
+  }
+  return Result<TransferSession>::Success(ImportSession(open_response.value()));
+}
 
+template <typename BufferView>
+[[nodiscard]] Result<TransferSession> OpenSessionForPut(
+    const GdsContext& context, const PutObjectRequest& request, BufferView buffer) {
+  auto registration = context.memory_registry.Register(OperationType::kPut, buffer);
+  if (!registration.success()) {
+    return Result<TransferSession>::Failure(registration.error());
+  }
+  auto open_request = MakeSessionHandshake(context.options, SessionPlan{
+      .operation = OperationType::kPut,
+      .object = request.object,
+      .timeout = request.timeout,
+      .idempotency_key = request.idempotency_key,
+      .buffer_type = buffer.type,
+      .path = DataFlow::GPUDirect,
+  });
   auto open_response = context.metadata_client.RpcOpenTransferSession(open_request);
   if (!open_response.success()) {
     return Result<TransferSession>::Failure(open_response.error());
@@ -62,19 +81,15 @@ GdsTransferPath::GdsTransferPath(const PlatformCapabilities& caps,
     : caps_(caps), context_(context),
       executor_provider_(std::move(executor_provider)) {}
 
-DataPath GdsTransferPath::path() const { return DataPath::kGdsCuObject; }
+DataFlow GdsTransferPath::path() const { return DataFlow::GPUDirect; }
 
 bool GdsTransferPath::available() const { return caps_.cuobject_available; }
 
-// GET 入口：按 request.length / parallel_get_threshold / chunks 选并发或单连接。
-// 与 HttpTransferPath::GetObject 路由逻辑完全对称。
-Result<TransferOutcome> GdsTransferPath::GetObject(const RequestOptions& request,
+Result<TransferOutcome> GdsTransferPath::GetObject(const GetObjectRequest& request,
                                                    MutableBufferView buffer) const {
   auto pre = PreflightGds(available(), buffer.type);
   if (!pre.success()) return Result<TransferOutcome>::Failure(pre.error());
 
-  // 并发条件：1) 已知 length；2) length >= threshold；3) chunks >= 2；4) executor 可用。
-  // 任一不满足走单连接 GetObjectSingle。
   const auto threshold = context_.options.gds.parallel_get_threshold;
   const auto chunks    = context_.options.gds.parallel_get_chunks;
   ClientExecutor* exec = executor_provider_ ? executor_provider_() : nullptr;
@@ -86,8 +101,8 @@ Result<TransferOutcome> GdsTransferPath::GetObject(const RequestOptions& request
 }
 
 Result<TransferOutcome> GdsTransferPath::GetObjectSingle(
-    const RequestOptions& request, MutableBufferView buffer) const {
-  auto session = OpenSession(context_, OperationType::kGet, request, buffer);
+    const GetObjectRequest& request, MutableBufferView buffer) const {
+  auto session = OpenSessionForGet(context_, request, buffer);
   if (!session.success()) {
     return Result<TransferOutcome>::Failure(session.error());
   }
@@ -95,10 +110,8 @@ Result<TransferOutcome> GdsTransferPath::GetObjectSingle(
                                             session.value(), request, buffer);
 }
 
-// 并发分片 GET：[offset, offset+length) 切 N 块，每块独立 OpenSession+ExecuteGet。
-// 子任务在 ClientExecutor (bthread) 上跑；任一失败立即返错。
 Result<TransferOutcome> GdsTransferPath::GetObjectParallel(
-    const RequestOptions& request, MutableBufferView buffer,
+    const GetObjectRequest& request, MutableBufferView buffer,
     ClientExecutor& executor) const {
   const std::uint64_t total = *request.length;
   const std::size_t   k     = std::min<std::size_t>(
@@ -106,7 +119,6 @@ Result<TransferOutcome> GdsTransferPath::GetObjectParallel(
       static_cast<std::size_t>(total));
   if (k <= 1) return GetObjectSingle(request, buffer);
 
-  // 对齐到 4KB GPU page 边界，提升 cuFile DMA 性能（避免 unaligned access）
   const std::uint64_t base_aligned = (total / k / kGpuPageSize) * kGpuPageSize;
   const std::uint64_t aligned_total = base_aligned * k;
   const std::uint64_t rem_bytes = total - aligned_total;
@@ -119,17 +131,14 @@ Result<TransferOutcome> GdsTransferPath::GetObjectParallel(
   futs.reserve(k);
 
   for (std::size_t i = 0; i < k; ++i) {
-    // 前 k-1 块对齐，最后一块包含剩余字节
     const std::uint64_t len = (i == k - 1) ? (base_aligned + rem_bytes) : base_aligned;
-    if (len == 0) continue;  // 跳过空块（total < k * kGpuPageSize 时）
+    if (len == 0) continue;
 
     const std::uint64_t off = cursor_off;
     void* dst = static_cast<std::byte*>(buffer.data) + cursor_buf;
     MutableBufferView sub{.data = dst, .size = len, .type = buffer.type};
 
-    // 构造子 RequestOptions：offset/length 收窄到本块，progress_callback 不传，
-    // 由父调用方在合并时统一回调。
-    RequestOptions sub_req = request;
+    GetObjectRequest sub_req = request;
     sub_req.offset = off;
     sub_req.length = len;
     sub_req.progress_callback = nullptr;
@@ -159,12 +168,12 @@ Result<TransferOutcome> GdsTransferPath::GetObjectParallel(
     if (request.progress_callback) {
       request.progress_callback({.bytes_completed = total_bytes,
                                   .bytes_total = total,
-                                  .data_path = DataPath::kGdsCuObject});
+                                  .data_flow = DataFlow::GPUDirect});
     }
   }
 
   TransferOutcome outcome;
-  outcome.selected_path     = DataPath::kGdsCuObject;
+  outcome.selected_flow     = DataFlow::GPUDirect;
   outcome.transfer_status   = "completed";
   outcome.etag              = std::move(etag);
   outcome.version           = std::move(version);
@@ -175,12 +184,11 @@ Result<TransferOutcome> GdsTransferPath::GetObjectParallel(
   return Result<TransferOutcome>::Success(std::move(outcome));
 }
 
-Result<TransferOutcome> GdsTransferPath::PutObject(const RequestOptions& request,
+Result<TransferOutcome> GdsTransferPath::PutObject(const PutObjectRequest& request,
                                                    ConstBufferView buffer) const {
   auto pre = PreflightGds(available(), buffer.type);
   if (!pre.success()) return Result<TransferOutcome>::Failure(pre.error());
 
-  // 入口拒：与 gateway 端 cuObjServer 1 GiB chunk 限制对齐，避免发到 server 才被拒。
   const auto max_put = context_.options.gds.put_single_max_bytes;
   if (max_put != 0 && buffer.size > max_put) {
     return Result<TransferOutcome>::Failure(MakeError(
@@ -191,17 +199,13 @@ Result<TransferOutcome> GdsTransferPath::PutObject(const RequestOptions& request
         /*retryable=*/false));
   }
 
-  // PUT 幂等覆写：retryable 错误自动重试，每次重做 OpenSession + ExecutePut。
-  // 失败时 best-effort abort server 端 session，避免重试导致 server 端
-  // session 积压（GDS 通路没有像 RDMA 那样的专用 AbortSession 数据面，
-  // 通过 ControlPlaneService::AbortSession RPC 触发 MarkFailed）。
   const auto deadline = std::chrono::steady_clock::now() + context_.options.request_timeout;
   return RetryIfRetryable(DefaultRetryPolicy(), [&]() -> Result<TransferOutcome> {
     if (std::chrono::steady_clock::now() >= deadline)
       return Result<TransferOutcome>::Failure(MakeError(
           ErrorCode::kTimeout, "PutObject retry deadline exceeded", true));
 
-    auto session = OpenSession(context_, OperationType::kPut, request, buffer);
+    auto session = OpenSessionForPut(context_, request, buffer);
     if (!session.success()) {
       return Result<TransferOutcome>::Failure(session.error());
     }
@@ -209,23 +213,18 @@ Result<TransferOutcome> GdsTransferPath::PutObject(const RequestOptions& request
     auto outcome = context_.cuobj_client.ExecutePut(context_.options, context_.data_client,
                                                       session.value(), request, buffer);
     if (!outcome.success()) {
-      // Best-effort 让 server 立即 mark failed，无需等 TTL sweep。
       (void)context_.metadata_client.AbortSession(session_id);
     }
     return outcome;
   });
 }
 
-// Multipart 单 part：与整对象 PutObject 同流程，但 expected_size=0 跳过
-// gateway 端 OnSessionOpened 的整对象 Reserve；最终走 cuobj.ExecutePutPart
-// 落 part_etag。逻辑搬自原 client.cpp::UploadPartGds，保持行为一致。
 Result<TransferOutcome> GdsTransferPath::PutObjectPart(
-    const RequestOptions& request, ConstBufferView buffer,
+    const PutObjectRequest& request, ConstBufferView buffer,
     const std::string& upload_id, std::uint32_t part_number) const {
   auto pre = PreflightGds(available(), buffer.type);
   if (!pre.success()) return Result<TransferOutcome>::Failure(pre.error());
 
-  // 入口拒：part size 也受 1 GiB chunk 限制约束。
   const auto max_put = context_.options.gds.put_single_max_bytes;
   if (max_put != 0 && buffer.size > max_put) {
     return Result<TransferOutcome>::Failure(MakeError(
@@ -235,20 +234,17 @@ Result<TransferOutcome> GdsTransferPath::PutObjectPart(
         /*retryable=*/false));
   }
 
-  // 单 part 幂等（同 part_number 覆盖），可重试。
-  // 失败时 best-effort abort 旧 session（与 PutObject 同款治理）。
   const auto deadline = std::chrono::steady_clock::now() + context_.options.request_timeout;
   return RetryIfRetryable(DefaultRetryPolicy(), [&]() -> Result<TransferOutcome> {
     if (std::chrono::steady_clock::now() >= deadline)
       return Result<TransferOutcome>::Failure(MakeError(
           ErrorCode::kTimeout, "PutObjectPart retry deadline exceeded", true));
 
-    auto session = OpenSession(context_, OperationType::kPut, request, buffer);
+    auto session = OpenSessionForPut(context_, request, buffer);
     if (!session.success()) {
       return Result<TransferOutcome>::Failure(session.error());
     }
     const std::string session_id = session.value().meta.session_id;
-
     auto outcome = context_.cuobj_client.ExecutePutPart(
         context_.options, context_.data_client, session.value(), request, buffer,
         upload_id, part_number);

@@ -69,7 +69,7 @@ bool BackendGdsSink::Start() {
   server_ = std::move(server);
   // pool 析构需 server 存活，见 Stop()。
   pool_ = std::make_shared<
-      us3_turbo_access::gateway::data_path::gds::PinnedBufferPool>(
+      us3_turbo_access::gateway::data_flow::gds::PinnedBufferPool>(
       *server_, BufferSizeClasses(), kBufferMaxPerClass);
   spdlog::info("backend: cuObjServer on {}:{}", bind_host_, rdma_port_);
   return true;
@@ -77,7 +77,7 @@ bool BackendGdsSink::Start() {
 
 void BackendGdsSink::Stop() {
   // 先销毁 pool（要在 server 还活着时调 deRegisterBuffer），再 reset server。
-  std::shared_ptr<us3_turbo_access::gateway::data_path::gds::PinnedBufferPool>
+  std::shared_ptr<us3_turbo_access::gateway::data_flow::gds::PinnedBufferPool>
       pool_to_destroy;
   pool_to_destroy = std::move(pool_);
   if (pool_to_destroy) {
@@ -94,7 +94,7 @@ bool BackendGdsSink::available() const {
 DiscardOutcome BackendGdsSink::ReceiveAndDiscard(const std::string& object_id,
                                                  const std::string& rdma_token,
                                                  std::uint64_t length) {
-  using namespace us3_turbo_access::gateway::data_path::gds;
+  using namespace us3_turbo_access::gateway::data_flow::gds;
   DiscardOutcome outcome;
 
   if (length > kMaxChunkBytes) {

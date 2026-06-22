@@ -17,7 +17,7 @@ namespace us3_turbo_access::client {
  * @brief GDS 数据面 chunk RPC 发起器（GdsChunk RPC 客户端薄包装）。
  *
  * 构造时绑定一次会话上下文（GdsDataClient、ClientOptions、TransferSession +
- * RequestOptions 快照），Dispatch 内只接 (rdma_token, chunk_offset, chunk_size)
+ * object/timeout/checksum_policy 快照），Dispatch 内只接 (rdma_token, chunk_offset, chunk_size)
  * 三个变化参数。token-direct 数据面 (cuobject_client.cpp::ExecuteTransfer) 每
  * 个 PUT/GET 调一次 Dispatch；multipart 模式下 SetMultipart 把绝对 offset 转
  * part 内偏移。
@@ -25,7 +25,9 @@ namespace us3_turbo_access::client {
 class ChunkDispatcher {
  public:
   ChunkDispatcher(const ClientOptions& options, const GdsDataClient& data_client,
-                  const TransferSession& session, const RequestOptions& request, OperationType op);
+                  const TransferSession& session, const GetObjectRequest& request, OperationType op);
+  ChunkDispatcher(const ClientOptions& options, const GdsDataClient& data_client,
+                  const TransferSession& session, const PutObjectRequest& request, OperationType op);
 
   void SetMultipart(std::string upload_id, std::uint32_t part_number);
 
@@ -56,7 +58,12 @@ class ChunkDispatcher {
   const GdsDataClient& data_client_;
   const ClientOptions& options_;
   OperationType op_;
-  RequestOptions request_;
+  ObjectId object_;
+  std::uint64_t offset_{0};
+  std::optional<std::uint64_t> length_;
+  std::chrono::milliseconds timeout_{std::chrono::milliseconds(30000)};
+  std::string checksum_policy_{"none"};
+  std::unordered_map<std::string, std::string> extra_headers_;
   std::string request_id_;
   std::string session_id_;
   std::string ticket_;

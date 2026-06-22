@@ -1,5 +1,5 @@
 // Native RDMA multipart 上传端到端测试：
-//   1. StartUpload（data_path=native-rdma）
+//   1. StartUpload（data_flow=native-rdma）
 //   2. UploadParts 并行推 N 个 part（PinnedBuffer + RDMA WRITE）
 //   3. Complete 拼对象 → HEAD 校验 size
 // 用法：rdma_multipart_example <endpoint> <total_bytes> <part_size>
@@ -40,7 +40,7 @@ int main(int argc, char** argv) {
   ClientOptions options;
   options.endpoint  = endpoint;
   options.client_id = "us3-rdma-multipart-example";
-  options.data_path = DataPath::kNativeRdma;
+  options.data_flow = DataFlow::CPUDirect;
   options.async_worker_threads = concurrency;
   Client client(std::move(options));
   if (auto init = client.Initialize(); !init.success()) {

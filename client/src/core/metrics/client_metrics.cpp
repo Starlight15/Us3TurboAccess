@@ -13,23 +13,21 @@ std::int64_t NowUs() {
       .count();
 }
 
-// 把 DataPath enum 映射为 array 索引（0/1/2）。
-// 取值范围必须与 OpenSession 等枚举顺序一致：kHttpTcp=0, kNativeRdma=1, kGdsCuObject=2。
-int PathIndex(DataPath p) {
+// 把 DataFlow enum 映射为 array 索引（0/1）。
+// 取值范围：GPUDirect=0, CPUDirect=1。
+int PathIndex(DataFlow p) {
   switch (p) {
-    case DataPath::kHttpTcp:     return 0;
-    case DataPath::kNativeRdma:  return 1;
-    case DataPath::kGdsCuObject: return 2;
+    case DataFlow::GPUDirect: return 0;
+    case DataFlow::CPUDirect:  return 1;
   }
   return 0;
 }
 
 // 给 path 子计数器拼 suffix。
-std::string PathSuffix(DataPath p) {
+std::string PathSuffix(DataFlow p) {
   switch (p) {
-    case DataPath::kHttpTcp:     return "_http_tcp";
-    case DataPath::kNativeRdma:  return "_native_rdma";
-    case DataPath::kGdsCuObject: return "_gds_cuobject";
+    case DataFlow::GPUDirect: return "_gds_cuobject";
+    case DataFlow::CPUDirect:  return "_native_rdma";
   }
   return "_unknown";
 }
@@ -49,7 +47,7 @@ ClientMetrics::ClientMetrics()
       upload_part("us3_client_upload_part"),
       retry_total("us3_client_retry_total") {
   // per-path 子计数器
-  for (DataPath p : {DataPath::kHttpTcp, DataPath::kNativeRdma, DataPath::kGdsCuObject}) {
+  for (DataFlow p : {DataFlow::GPUDirect, DataFlow::CPUDirect}) {
     const auto idx = PathIndex(p);
     const auto suf = PathSuffix(p);
     put_by_path[idx] = std::make_unique<OpCounters>(
@@ -69,8 +67,8 @@ ClientMetrics& ClientMetrics::Instance() {
 }
 
 ScopedTransferMetric::ScopedTransferMetric(Op op, std::int64_t bytes,
-                                            std::optional<DataPath> data_path)
-    : op_(op), bytes_(bytes), start_us_(NowUs()), data_path_(data_path) {}
+                                            std::optional<DataFlow> data_flow)
+    : op_(op), bytes_(bytes), start_us_(NowUs()), data_path_(data_flow) {}
 
 ScopedTransferMetric::~ScopedTransferMetric() {
   const auto elapsed_us = NowUs() - start_us_;

@@ -18,13 +18,13 @@ class CuObjectClient {
   [[nodiscard]] Result<TransferOutcome> ExecuteGet(const ClientOptions& options,
                                                    const GdsDataClient& data_client,
                                                    const TransferSession& session,
-                                                   const RequestOptions& request,
+                                                   const GetObjectRequest& request,
                                                    MutableBufferView buffer) const;
 
   [[nodiscard]] Result<TransferOutcome> ExecutePut(const ClientOptions& options,
                                                    const GdsDataClient& data_client,
                                                    const TransferSession& session,
-                                                   const RequestOptions& request,
+                                                   const PutObjectRequest& request,
                                                    ConstBufferView buffer) const;
 
   /**
@@ -33,7 +33,7 @@ class CuObjectClient {
    */
   [[nodiscard]] Result<TransferOutcome> ExecutePutPart(
       const ClientOptions& options, const GdsDataClient& data_client,
-      const TransferSession& session, const RequestOptions& request,
+      const TransferSession& session, const PutObjectRequest& request,
       ConstBufferView buffer, const std::string& upload_id,
       std::uint32_t part_number) const;
 };

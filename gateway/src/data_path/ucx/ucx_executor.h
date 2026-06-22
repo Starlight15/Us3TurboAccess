@@ -28,7 +28,7 @@ namespace us3_turbo_access::gateway::core {
 class MetadataService;
 }
 
-namespace us3_turbo_access::gateway::data_path::ucx {
+namespace us3_turbo_access::gateway::data_flow::ucx {
 
 /** PrepareTransfer 返回给 client。 */
 struct UcxDiscoverInfo {
@@ -54,7 +54,7 @@ struct UcxCommitPartInfo{ std::string part_etag; };
  * Multipart part 的业务编排（Lookup / RegisterPart）已迁至
  * UcxMultipartPathHandler；本类只保留纯数据写入能力。
  */
-class UcxExecutor final : public data_path::IDataPathExecutor {
+class UcxExecutor final : public data_flow::IDataPathExecutor {
  public:
   // AM handler ID：client 写完后发此 AM 携带 session_id，触发 write_done
   static constexpr std::uint8_t kAmIdWriteDone = 0;
@@ -69,7 +69,7 @@ class UcxExecutor final : public data_path::IDataPathExecutor {
   UcxExecutor(const UcxExecutor&) = delete;
   UcxExecutor& operator=(const UcxExecutor&) = delete;
 
-  [[nodiscard]] DataPath    kind()      const noexcept override { return DataPath::kNativeRdma; }
+  [[nodiscard]] DataFlow    kind()      const noexcept override { return DataFlow::CPUDirect; }
   [[nodiscard]] bool        available() const override {
     return started_.load(std::memory_order_acquire);
   }
@@ -172,4 +172,4 @@ class UcxExecutor final : public data_path::IDataPathExecutor {
   std::unique_ptr<UcxBufferPool>                 buffer_pool_;
 };
 
-}  // namespace us3_turbo_access::gateway::data_path::ucx
+}  // namespace us3_turbo_access::gateway::data_flow::ucx

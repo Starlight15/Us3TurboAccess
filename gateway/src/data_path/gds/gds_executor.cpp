@@ -20,7 +20,7 @@
 #include "data_path/gds/buffer_pool.h"
 #include "data_path/gds/cuobj_resources.h"
 
-namespace us3_turbo_access::gateway::data_path::gds {
+namespace us3_turbo_access::gateway::data_flow::gds {
 
 namespace {
 
@@ -424,4 +424,4 @@ Result<std::string> GdsExecutor::PutPart(const core::Session& session,
   return write;
 }
 
-}  // namespace us3_turbo_access::gateway::data_path::gds
+}  // namespace us3_turbo_access::gateway::data_flow::gds

@@ -29,20 +29,15 @@ class MultipartCoordinator;
 class MultipartAppService;
 }  // namespace us3_turbo_access::gateway::core::multipart
 
-namespace us3_turbo_access::gateway::data_path::gds {
+namespace us3_turbo_access::gateway::data_flow::gds {
 class GdsExecutor;
 class GdsMultipartPathHandler;
-}  // namespace us3_turbo_access::gateway::data_path::gds
+}  // namespace us3_turbo_access::gateway::data_flow::gds
 
-namespace us3_turbo_access::gateway::data_path::ucx {
+namespace us3_turbo_access::gateway::data_flow::ucx {
 class UcxExecutor;
 class UcxMultipartPathHandler;
-}  // namespace us3_turbo_access::gateway::data_path::ucx
-
-namespace us3_turbo_access::gateway::data_path::http {
-class HttpExecutor;
-class HttpMultipartPathHandler;
-}  // namespace us3_turbo_access::gateway::data_path::http
+}  // namespace us3_turbo_access::gateway::data_flow::ucx
 
 namespace us3_turbo_access::gateway::runtime {
 class IoWorkerPool;
@@ -50,7 +45,6 @@ class IoWorkerPool;
 
 namespace us3_turbo_access::gateway::api {
 class ControlPlaneService;
-class HttpFrontend;
 class RdmaDataPlaneService;
 }  // namespace us3_turbo_access::gateway::api
 
@@ -94,16 +88,13 @@ class GatewayRuntime {
   std::unique_ptr<core::multipart::MultipartAppService>  multipart_app_;
   std::unique_ptr<runtime::IoWorkerPool>               io_pool_;
   std::unique_ptr<core::MetadataService>               metadata_;
-  std::unique_ptr<data_path::http::HttpExecutor>             http_executor_;
-  std::unique_ptr<data_path::http::HttpMultipartPathHandler> http_multipart_handler_;
-  std::unique_ptr<core::SessionOpener>                 session_opener_;
-  std::unique_ptr<data_path::gds::GdsExecutor>               gds_executor_;
-  std::unique_ptr<data_path::gds::GdsMultipartPathHandler>   gds_multipart_handler_;
-  std::unique_ptr<data_path::ucx::UcxExecutor>               ucx_executor_;
-  std::unique_ptr<data_path::ucx::UcxMultipartPathHandler>   ucx_multipart_handler_;
+  std::unique_ptr<data_flow::gds::GdsExecutor>               gds_executor_;
+  std::unique_ptr<data_flow::gds::GdsMultipartPathHandler>   gds_multipart_handler_;
+  std::unique_ptr<data_flow::ucx::UcxExecutor>               ucx_executor_;
+  std::unique_ptr<data_flow::ucx::UcxMultipartPathHandler>   ucx_multipart_handler_;
+  std::unique_ptr<core::SessionOpener>                       session_opener_;
   std::unique_ptr<api::ControlPlaneService>            control_plane_;
   std::unique_ptr<api::RdmaDataPlaneService>           rdma_data_plane_;
-  std::unique_ptr<api::HttpFrontend>                   http_frontend_;
   brpc::Server                                         server_;
   bool                                                 started_{false};
 };

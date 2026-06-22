@@ -63,7 +63,7 @@ class BackendGdsSink {
   std::string bind_host_;
   int         rdma_port_;
   std::shared_ptr<cuObjServer> server_;
-  std::shared_ptr<us3_turbo_access::gateway::data_path::gds::PinnedBufferPool>
+  std::shared_ptr<us3_turbo_access::gateway::data_flow::gds::PinnedBufferPool>
       pool_;
 };
 

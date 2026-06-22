@@ -12,12 +12,10 @@
 #include "client/src/core/common/channel_registry.h"
 #include "client/src/core/gds/gds_context.h"
 #include "client/src/core/gds/gds_transfer_path.h"
-#include "client/src/core/http/http_transfer_path.h"
 #include "client/src/core/rdma/rdma_transfer_path.h"
 #include "client/src/core/routing/transfer_router.h"
 #include "client/src/core/upload/upload_coordinator.h"
 #include "client/src/data/gds_data_client.h"
-#include "client/src/data/http_data_client.h"
 #include "client/src/data/rdma_data_plane_client.h"
 #include "client/src/transports/gds/cuobject_client.h"
 #include "client/src/transports/gds/gds_memory_registry.h"
@@ -59,10 +57,6 @@ class ClientCore {
   [[nodiscard]] const GdsTransferPath& gds_transfer_path() const;
   // UCX RDMA 传输通路
   [[nodiscard]] const RdmaTransferPath& rdma_transfer_path() const;
-  // HTTP 传输通路
-  [[nodiscard]] const HttpTransferPath& http_transfer_path() const;
-  // HTTP 数据面客户端
-  [[nodiscard]] HttpDataClient& http_data_client();
   // 分片上传协调器
   [[nodiscard]] UploadCoordinator& upload_coordinator();
   // 异步操作线程池
@@ -93,7 +87,6 @@ struct ClientCore::Impl {
         metadata_client(channels, options),
         gds_data_client(channels, options),
         rdma_data_plane_client(channels, options),
-        http_data_client(options),
         gds_executor(caps, GdsContext{.options = options,
                                       .metadata_client = metadata_client,
                                       .data_client = gds_data_client,
@@ -101,31 +94,18 @@ struct ClientCore::Impl {
                                       .cuobj_client = cuobject_client},
                       AsyncExecutorAccessor{this}),
         rdma_executor(options, metadata_client, rdma_data_plane_client),
-        http_executor(options, http_data_client,
-                       AsyncExecutorAccessor{this}),
-        transfer_router(options.data_path, gds_executor, rdma_executor,
-                        http_executor) {}
+        transfer_router(options.data_flow, gds_executor, rdma_executor) {}
 
   ClientOptions       options;
   PlatformCapabilities caps;
-  // ChannelRegistry 必须在三个 baidu_std client 之前构造（提供 brpc::Channel*）。
-  // 真正的 brpc::Channel 在 ChannelRegistry::Initialize 时才创建；构造期
-  // baidu_std() 返回 nullptr，三个 client 接受 nullptr，等 Initialize 路径
-  // 把 channel 建好后再调它们各自的 Initialize 创建 Stub。
-  // 由于 client 持的是 brpc::Channel*（成员变量在 Impl 构造时已绑定），
-  // ChannelRegistry::Initialize 必须创建 channel 并把 unique_ptr 持有，
-  // 而 baidu_std() 返回的是 unique_ptr.get()——因此 client 持的指针必须在
-  // Initialize 后才有效。把 ChannelRegistry::Initialize 放在最早一步即可。
   ChannelRegistry     channels;
   MetadataClient      metadata_client;
   GdsDataClient       gds_data_client;
   RdmaDataPlaneClient rdma_data_plane_client;
-  HttpDataClient      http_data_client;
   GdsMemoryRegistry   gds_memory_registry;
   CuObjectClient      cuobject_client;
   GdsTransferPath     gds_executor;
   RdmaTransferPath    rdma_executor;
-  HttpTransferPath    http_executor;
   TransferRouter      transfer_router;
   // upload_coordinator 必须在 metadata_client + http_data_client 之后构造
   // （它持有它们的引用），但又在 async_executor 之前；声明顺序自然满足。
@@ -153,8 +133,6 @@ inline GdsMemoryRegistry& ClientCore::gds_memory_registry() { return impl_->gds_
 inline const CuObjectClient& ClientCore::cuobj_client() const { return impl_->cuobject_client; }
 inline const GdsTransferPath& ClientCore::gds_transfer_path() const { return impl_->gds_executor; }
 inline const RdmaTransferPath& ClientCore::rdma_transfer_path() const { return impl_->rdma_executor; }
-inline const HttpTransferPath& ClientCore::http_transfer_path() const { return impl_->http_executor; }
-inline HttpDataClient& ClientCore::http_data_client() { return impl_->http_data_client; }
 inline UploadCoordinator& ClientCore::upload_coordinator() { return *impl_->upload_coordinator; }
 inline ClientExecutor& ClientCore::async_executor() const { return *impl_->async_executor; }
 

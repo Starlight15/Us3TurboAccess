@@ -34,7 +34,7 @@ void ApplyRequestTimeout(brpc::Controller& controller,
 
 Result<bool> CheckRpcFailure(const brpc::Controller& controller,
                              const std::string& message,
-                             DataPath path,
+                             DataFlow path,
                              const std::string& request_id) {
   if (!controller.Failed()) {
     return Result<bool>::Success(true);

@@ -51,7 +51,7 @@ Result<std::shared_ptr<Session>> SessionStore::Create(const OpenSessionParams& r
   session->bucket = req.bucket;
   session->object_key = req.object_key;
   session->op = req.op;
-  session->data_path = req.data_path;
+  session->data_flow = req.data_flow;
   session->buffer_type = req.buffer_type.empty() ? "host-regular" : req.buffer_type;
   session->offset = req.offset;
   session->expected_size = req.expected_size;
@@ -79,10 +79,10 @@ Result<std::shared_ptr<Session>> SessionStore::Create(const OpenSessionParams& r
   }
 
   if (logger_ != nullptr) {
-    logger_->info("session.create id={} ticket={} op={} data_path={} size={}",
+    logger_->info("session.create id={} ticket={} op={} data_flow={} size={}",
                   session->session_id, session->ticket,
                   std::string(ToString(session->op)),
-                  std::string(ToString(session->data_path)),
+                  std::string(ToString(session->data_flow)),
                   session->expected_size);
   }
   return Result<std::shared_ptr<Session>>::Success(session);

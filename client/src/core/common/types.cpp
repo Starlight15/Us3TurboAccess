@@ -2,14 +2,14 @@
 
 namespace us3_turbo_access::client {
 
-std::string_view ToString(DataPath path) {
-  switch (path) {
-    case DataPath::kGdsCuObject:
-      return "gds-cuobject";
-    case DataPath::kNativeRdma:
-      return "native-rdma";
-    case DataPath::kHttpTcp:
-      return "http-tcp";
+std::string_view ToString(DataFlow flow) {
+  switch (flow) {
+    case DataFlow::NONE:
+      return "none";
+    case DataFlow::GPUDirect:
+      return "gpu-direct";
+    case DataFlow::CPUDirect:
+      return "cpu-direct";
   }
   return "unknown";
 }

@@ -2,7 +2,7 @@
 
 #include <cstdlib>
 
-namespace us3_turbo_access::gateway::data_path::gds {
+namespace us3_turbo_access::gateway::data_flow::gds {
 
 HostBuffer::~HostBuffer() {
   if (data_ != nullptr) {
@@ -10,4 +10,4 @@ HostBuffer::~HostBuffer() {
   }
 }
 
-}  // namespace us3_turbo_access::gateway::data_path::gds
+}  // namespace us3_turbo_access::gateway::data_flow::gds

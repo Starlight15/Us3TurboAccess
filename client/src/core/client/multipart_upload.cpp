@@ -216,7 +216,7 @@ Result<TransferOutcome> MultipartUpload::UploadPart(std::uint32_t part_number,
 
   ScopedTransferMetric metric(ScopedTransferMetric::Op::kUploadPart,
                                 static_cast<std::int64_t>(buffer.size),
-                                impl_->data_path);
+                                impl_->data_flow);
   auto outcome = impl_->session->UploadPart(
       part_number, object_offset, checksum_policy, buffer);
   if (outcome.success()) metric.MarkSuccess();

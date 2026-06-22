@@ -20,7 +20,7 @@ struct StartUploadParams {
   std::string                bucket;
   std::string                object_key;
   std::optional<std::size_t> expected_total_size;
-  std::string                data_path;
+  std::string                data_flow;
   std::string                idempotency_key;
 };
 

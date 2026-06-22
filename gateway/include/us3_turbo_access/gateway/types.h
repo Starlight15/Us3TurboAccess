@@ -17,20 +17,20 @@ enum class OperationType {
 };
 
 /**
- * @brief Wire identifier of the data path resolved with the client.
+ * @brief Wire identifier of the data flow resolved with the client.
  *
  * Values mirror the strings the client SDK sends on the wire
- * (`http-tcp`, `native-rdma`, `gds-cuobject`).
+ * (`cpu-direct`, `gpu-direct`).
  */
-enum class DataPath {
-  kHttpTcp,
-  kNativeRdma,
-  kGdsCuObject,
+enum class DataFlow {
+  NONE,
+  CPUDirect,
+  GPUDirect,
 };
 
 [[nodiscard]] std::string_view ToString(OperationType op) noexcept;
-[[nodiscard]] std::string_view ToString(DataPath path) noexcept;
-[[nodiscard]] DataPath          ParseDataPath(std::string_view text) noexcept;
+[[nodiscard]] std::string_view ToString(DataFlow flow) noexcept;
+[[nodiscard]] DataFlow          ParseDataFlow(std::string_view text) noexcept;
 [[nodiscard]] OperationType     ParseOperationType(std::string_view text) noexcept;
 
 /**

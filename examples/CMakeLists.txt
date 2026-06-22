@@ -11,11 +11,6 @@
 #
 # 性能压测代码不放这里，见 bench/CMakeLists.txt。
 
-# ---- HTTP 通路用例 (http/*.cpp) ----------------------------------------
-
-add_executable(us3_turbo_access_http_put_example       http/http_put_example.cpp)
-add_executable(us3_turbo_access_http_multipart_example http/http_multipart_example.cpp)
-
 # ---- RDMA 通路用例 (rdma/*.cpp) ----------------------------------------
 
 add_executable(us3_turbo_access_rdma_put_example       rdma/rdma_put_example.cpp)
@@ -34,8 +29,6 @@ target_include_directories(us3_turbo_access_gds_multipart_example PRIVATE ${CUFI
 # ---- 共通链接 ----------------------------------------------------------
 
 set(US3_EXAMPLE_TARGETS
-    us3_turbo_access_http_put_example
-    us3_turbo_access_http_multipart_example
     us3_turbo_access_rdma_put_example
     us3_turbo_access_rdma_multipart_example
     us3_turbo_access_gds_put_example

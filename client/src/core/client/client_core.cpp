@@ -35,11 +35,6 @@ Result<bool> ClientCore::Initialize() {
   auto rdma_dp_init = impl_->rdma_data_plane_client.Initialize();
   if (!rdma_dp_init.success()) return rdma_dp_init;
 
-  // HTTP 是可选 fallback 路径：channel 初始化失败也不让整体 init 失败，
-  // 仅把 http_executor.available() 留作 false，路径切到 HTTP 时再报错。
-  auto http_init = impl_->http_data_client.Initialize();
-  impl_->http_executor.SetAvailable(http_init.success());
-
   // UCX 路径：RdmaTransferPath 构造时已内部初始化 UCX context/worker。
   // available() 内部校验 ucx_ctx_/ucx_worker_ 非空，初始化失败时自动返回 false。
   impl_->rdma_executor.SetAvailable(true);
@@ -75,8 +70,6 @@ void ClientCore::Shutdown() {
   impl_->metadata_client.Shutdown();
   impl_->gds_data_client.Shutdown();
   impl_->rdma_data_plane_client.Shutdown();
-  impl_->http_executor.SetAvailable(false);
-  impl_->http_data_client.Shutdown();
   impl_->rdma_executor.SetAvailable(false);
   impl_->initialized = false;
 }

@@ -12,7 +12,7 @@
 #include "core/multipart/multipart.h"
 #include "data_path/ucx/ucx_executor.h"
 
-namespace us3_turbo_access::gateway::data_path::ucx {
+namespace us3_turbo_access::gateway::data_flow::ucx {
 
 UcxMultipartPathHandler::UcxMultipartPathHandler(
     UcxExecutor& executor,
@@ -83,4 +83,4 @@ void FinishCommitPart(std::shared_ptr<CommitPartContext> ctx,
   ctx->on_done(Result<UcxMultipartPartResult>::Success(std::move(result)));
 }
 
-}  // namespace us3_turbo_access::gateway::data_path::ucx
+}  // namespace us3_turbo_access::gateway::data_flow::ucx

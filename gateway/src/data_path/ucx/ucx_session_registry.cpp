@@ -1,6 +1,6 @@
 #include "data_path/ucx/ucx_session_registry.h"
 
-namespace us3_turbo_access::gateway::data_path::ucx {
+namespace us3_turbo_access::gateway::data_flow::ucx {
 
 std::shared_ptr<UcxSessionEntry> UcxSessionRegistry::Create(
     std::string session_id, std::string bucket,
@@ -34,4 +34,4 @@ UcxSessionRegistry::Erase(std::string_view session_id) {
   return entry;
 }
 
-}  // namespace us3_turbo_access::gateway::data_path::ucx
+}  // namespace us3_turbo_access::gateway::data_flow::ucx

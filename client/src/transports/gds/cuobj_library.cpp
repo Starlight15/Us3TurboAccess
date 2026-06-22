@@ -24,7 +24,7 @@ template <typename Symbol>
   const char* error = dlerror();
   if (error != nullptr || symbol == nullptr) {
     return Result<Symbol>::Failure(MakeUnsupportedPath(
-        DataPath::kGdsCuObject, "Failed to resolve libcuobjclient symbol: " + std::string(name)));
+        DataFlow::GPUDirect, "Failed to resolve libcuobjclient symbol: " + std::string(name)));
   }
   return Result<Symbol>::Success(reinterpret_cast<Symbol>(symbol));
 }
@@ -102,7 +102,7 @@ template <typename Symbol>
     return Result<CuObjLibrary>::Failure(api.error());
   }
   return Result<CuObjLibrary>::Failure(
-      MakeUnsupportedPath(DataPath::kGdsCuObject, "Failed to dynamically load libcuobjclient"));
+      MakeUnsupportedPath(DataFlow::GPUDirect, "Failed to dynamically load libcuobjclient"));
 }
 
 }  // namespace

@@ -42,7 +42,7 @@ Result<EpSlot> UcxEndpointPool::Acquire(
   addr.sin_port   = htons(port);
   if (inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1)
     return Result<EpSlot>::Failure(
-        MakeTransportFailure("invalid UCX host: " + host, DataPath::kNativeRdma, {}, false));
+        MakeTransportFailure("invalid UCX host: " + host, DataFlow::CPUDirect, {}, false));
 
   ucp_ep_params_t params{};
   params.field_mask       = UCP_EP_PARAM_FIELD_FLAGS | UCP_EP_PARAM_FIELD_SOCK_ADDR;
@@ -54,7 +54,7 @@ Result<EpSlot> UcxEndpointPool::Acquire(
   ucs_status_t st = ucp_ep_create(worker_.handle(), &params, &ep);
   if (st != UCS_OK)
     return Result<EpSlot>::Failure(
-        MakeTransportFailure(ucs_status_string(st), DataPath::kNativeRdma, {}, true));
+        MakeTransportFailure(ucs_status_string(st), DataFlow::CPUDirect, {}, true));
 
   // 新 ep 首次 unpack rkey
   ucp_rkey_h rkey = nullptr;

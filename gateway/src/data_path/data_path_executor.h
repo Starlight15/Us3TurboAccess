@@ -9,7 +9,7 @@ namespace us3_turbo_access::gateway::core {
 class Session;
 }  // namespace us3_turbo_access::gateway::core
 
-namespace us3_turbo_access::gateway::data_path {
+namespace us3_turbo_access::gateway::data_flow {
 
 /**
  * @brief Common contract for every server-side data-path implementation
@@ -27,8 +27,8 @@ class IDataPathExecutor {
   IDataPathExecutor(const IDataPathExecutor&) = delete;
   IDataPathExecutor& operator=(const IDataPathExecutor&) = delete;
 
-  /** @brief Wire identifier for the path this executor implements. */
-  [[nodiscard]] virtual DataPath kind() const noexcept = 0;
+  /** @brief Wire identifier for the flow this executor implements. */
+  [[nodiscard]] virtual DataFlow kind() const noexcept = 0;
 
   /** @brief True once Start() has produced a usable transport. */
   [[nodiscard]] virtual bool available() const = 0;
@@ -57,4 +57,4 @@ class IDataPathExecutor {
   IDataPathExecutor() = default;
 };
 
-}  // namespace us3_turbo_access::gateway::data_path
+}  // namespace us3_turbo_access::gateway::data_flow

@@ -82,7 +82,7 @@ int main(int argc, char** argv) {
     options.gds_data_endpoint = EnvOr("GDS_GDSPUT_ENDPOINT", "");
   }
   options.client_id = "us3-gds-example";
-  options.data_path = DataPath::kGdsCuObject;
+  options.data_flow = DataFlow::GPUDirect;
 
   Client client(std::move(options));
   auto init_result = client.Initialize();
@@ -104,7 +104,7 @@ int main(int argc, char** argv) {
     cudaFree(device_upload); cudaFree(device_download); return 1;
   }
 
-  RequestOptions request;
+  PutObjectRequest request;
   request.object = ObjectId{.bucket = bucket, .key = object_key};
 
   auto put_result = client.PutObject(
@@ -115,7 +115,7 @@ int main(int argc, char** argv) {
     cudaFree(device_download);
     return 1;
   }
-  std::cout << "PUT path=" << ToString(put_result.value().selected_path)
+  std::cout << "PUT path=" << ToString(put_result.value().selected_flow)
             << " bytes=" << put_result.value().bytes_transferred << std::endl;
 
   auto head_result = client.HeadObject(request.object);
@@ -127,15 +127,17 @@ int main(int argc, char** argv) {
   }
   std::cout << "HEAD size=" << head_result.value().content_length << std::endl;
 
+  GetObjectRequest get_req;
+  get_req.object = request.object;
   auto get_result = client.GetObject(
-      request, MutableBufferView{.data = device_download, .size = bytes, .type = BufferType::kCudaDevice});
+      get_req, MutableBufferView{.data = device_download, .size = bytes, .type = BufferType::kCudaDevice});
   if (!get_result.success()) {
     std::cerr << "GetObject failed: " << get_result.error().message << std::endl;
     cudaFree(device_upload);
     cudaFree(device_download);
     return 1;
   }
-  std::cout << "GET path=" << ToString(get_result.value().selected_path)
+  std::cout << "GET path=" << ToString(get_result.value().selected_flow)
             << " bytes=" << get_result.value().bytes_transferred << std::endl;
 
   if (!CheckCuda(cudaMemcpy(host_download.data(), device_download, bytes, cudaMemcpyDeviceToHost),

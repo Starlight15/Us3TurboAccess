@@ -4,7 +4,7 @@
 #include <cstdlib>
 #include <utility>
 
-namespace us3_turbo_access::gateway::data_path::gds {
+namespace us3_turbo_access::gateway::data_flow::gds {
 
 PinnedBufferLease::PinnedBufferLease(PinnedBufferPool* pool, void* data,
                                      std::size_t capacity, rdma_buffer* mr,
@@ -201,4 +201,4 @@ void PinnedBufferPool::Shutdown() {
   }
 }
 
-}  // namespace us3_turbo_access::gateway::data_path::gds
+}  // namespace us3_turbo_access::gateway::data_flow::gds

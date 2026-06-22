@@ -118,7 +118,7 @@ int main(int argc, char** argv) {
   ClientOptions options;
   options.endpoint  = a.endpoint;
   options.client_id = "us3-gds-put-bench";
-  options.data_path = DataPath::kGdsCuObject;
+  options.data_flow = DataFlow::GPUDirect;
   Client client(std::move(options));
   if (auto init = client.Initialize(); !init.success()) {
     std::cerr << "Initialize failed: " << init.error().message << std::endl;
@@ -146,10 +146,9 @@ int main(int argc, char** argv) {
   // 个不同对象循环 overwrite，避免长时间测试把后端容量吃满。
   const std::size_t key_mod = a.key_modulo > 0 ? a.key_modulo : a.count;
   auto do_put = [&](std::size_t idx) -> Result<TransferOutcome> {
-    RequestOptions req;
+    PutObjectRequest req;
     req.object = ObjectId{.bucket = a.bucket,
                           .key = a.key_prefix + std::to_string(idx % key_mod)};
-    req.length = a.object_size;
     void* dev = dev_pool[idx % pool_size];
     ConstBufferView v{.data = dev, .size = a.object_size,
                        .type = BufferType::kCudaDevice};

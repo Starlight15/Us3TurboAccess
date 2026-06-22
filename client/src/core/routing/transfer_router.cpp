@@ -5,7 +5,7 @@
 namespace us3_turbo_access::client {
 namespace {
 
-[[nodiscard]] Error MakeNoAvailableTransportError(DataPath path) {
+[[nodiscard]] Error MakeNoAvailableTransportError(DataFlow path) {
   return MakeUnsupportedPath(path,
                              "The configured transfer channel is unavailable: " +
                                  std::string(ToString(path)));
@@ -13,15 +13,13 @@ namespace {
 
 }  // namespace
 
-TransferRouter::TransferRouter(DataPath data_path, const TransferPath& gds_executor,
-                               const TransferPath& rdma_executor,
-                               const TransferPath& http_executor)
-    : data_path_(data_path),
+TransferRouter::TransferRouter(DataFlow data_flow, const TransferPath& gds_executor,
+                               const TransferPath& rdma_executor)
+    : data_path_(data_flow),
       gds_executor_(gds_executor),
-      rdma_executor_(rdma_executor),
-      http_executor_(http_executor) {}
+      rdma_executor_(rdma_executor) {}
 
-Result<TransferOutcome> TransferRouter::GetObject(const RequestOptions& request,
+Result<TransferOutcome> TransferRouter::GetObject(const GetObjectRequest& request,
                                                   MutableBufferView buffer) const {
   const auto* executor = SelectTransferPath();
   if (executor == nullptr) {
@@ -30,7 +28,7 @@ Result<TransferOutcome> TransferRouter::GetObject(const RequestOptions& request,
   return executor->GetObject(request, buffer);
 }
 
-Result<TransferOutcome> TransferRouter::PutObject(const RequestOptions& request,
+Result<TransferOutcome> TransferRouter::PutObject(const PutObjectRequest& request,
                                                   ConstBufferView buffer) const {
   const auto* executor = SelectTransferPath();
   if (executor == nullptr || !executor->available()) {
@@ -41,12 +39,10 @@ Result<TransferOutcome> TransferRouter::PutObject(const RequestOptions& request,
 
 const TransferPath* TransferRouter::SelectTransferPath() const {
   switch (data_path_) {
-    case DataPath::kGdsCuObject:
+    case DataFlow::GPUDirect:
       return &gds_executor_;
-    case DataPath::kNativeRdma:
+    case DataFlow::CPUDirect:
       return &rdma_executor_;
-    case DataPath::kHttpTcp:
-      return &http_executor_;
   }
   return nullptr;
 }

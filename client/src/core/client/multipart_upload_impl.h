@@ -14,7 +14,7 @@ namespace us3_turbo_access::client {
 struct MultipartUpload::Impl {
   std::unique_ptr<IMultipartSession> session;
   std::string        checksum_policy{"none"};
-  DataPath           data_path{DataPath::kGdsCuObject};
+  DataFlow           data_flow{DataFlow::GPUDirect};
 
   std::mutex                              mu;
   std::vector<IMultipartSession::PartRef> parts;

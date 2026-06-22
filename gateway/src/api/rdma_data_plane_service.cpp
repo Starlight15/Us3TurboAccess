@@ -11,8 +11,8 @@
 namespace us3_turbo_access::gateway::api {
 
 RdmaDataPlaneService::RdmaDataPlaneService(
-    data_path::ucx::UcxExecutor& executor,
-    data_path::ucx::UcxMultipartPathHandler& multipart_handler,
+    data_flow::ucx::UcxExecutor& executor,
+    data_flow::ucx::UcxMultipartPathHandler& multipart_handler,
     std::shared_ptr<spdlog::logger> logger)
     : executor_(executor),
       multipart_handler_(multipart_handler),
@@ -62,7 +62,7 @@ void RdmaDataPlaneService::CommitObject(
       request->session_id(),
       request->bytes_transferred(),
       request->client_checksum(),
-      [cntl, response, done](Result<data_path::ucx::UcxCommitInfo> info) {
+      [cntl, response, done](Result<data_flow::ucx::UcxCommitInfo> info) {
         if (!info.success()) { cntl->SetFailed(info.error().message); }
         else {
           response->set_etag(info.value().etag);
@@ -86,7 +86,7 @@ void RdmaDataPlaneService::CommitPart(
       request->session_id(), request->upload_id(),
       request->part_number(), request->bytes_transferred(),
       request->client_checksum(),
-      [cntl, response, done](Result<data_path::ucx::UcxMultipartPartResult> info) {
+      [cntl, response, done](Result<data_flow::ucx::UcxMultipartPartResult> info) {
         if (!info.success()) { cntl->SetFailed(info.error().message); }
         else { response->set_part_etag(info.value().part_etag); }
         done->Run();

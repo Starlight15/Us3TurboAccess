@@ -56,32 +56,32 @@ constexpr char kDefaultGatewayId[] = "gateway-local";
 SessionOpening MakeSessionHandshake(const ClientOptions& options,
                                             const SessionPlan& input) {
   return SessionOpening{
-      .context = MakeRpcContext(options, input.request.timeout, input.operation),
+      .context = MakeRpcContext(options, input.timeout, input.operation),
       .operation = input.operation,
-      .object = input.request.object,
-      .data_path = input.path,
+      .object = input.object,
+      .data_flow = input.path,
       .buffer_type = input.buffer_type,
-      .offset = input.request.offset,
-      .length = input.request.length,
+      .offset = input.offset,
+      .length = input.length,
       .request_id = MakeId(kRequestIdPrefix),
       .session_id = MakeId(kSessionIdPrefix),
-      .idempotency_key = input.request.idempotency_key,
+      .idempotency_key = input.idempotency_key,
       .is_multipart_part = input.is_multipart_part,
   };
 }
 
 ChunkOp MakeChunkOp(const ClientOptions& options, ChunkOpPlan input) {
   ObjectRequest object{
-      .object = input.request.object,
-      .offset = input.request.offset,
-      .length = input.request.length,
-      .data_path = input.path,
+      .object = input.object,
+      .offset = input.offset,
+      .length = input.length,
+      .data_flow = input.path,
       .buffer_type = input.buffer_type,
-      .checksum_policy = input.request.checksum_policy,
-      .extra_headers = input.request.extra_headers,
+      .checksum_policy = input.checksum_policy,
+      .extra_headers = input.extra_headers,
   };
   return ChunkOp{
-      .context = MakeRpcContext(options, input.request.timeout, input.operation),
+      .context = MakeRpcContext(options, input.timeout, input.operation),
       .object = std::move(object),
       .operation = input.operation,
       .request_id = std::move(input.request_id),

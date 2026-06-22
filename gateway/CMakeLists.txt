@@ -1,12 +1,10 @@
 add_executable(us3_turbo_access_gateway
   ${US3_TURBO_ACCESS_CONTROL_PROTO_SRCS}
-  ${US3_TURBO_ACCESS_HTTP_PROTO_SRCS}
   ${US3_TURBO_ACCESS_RDMA_PROTO_SRCS}
   src/app/main.cpp
   src/app/server.cpp
   src/api/control_plane_service.cpp
   src/api/conversions.cpp
-  src/api/http_frontend.cpp
   src/api/rdma_data_plane_service.cpp
   src/backend/backend.cpp
   src/backend/composite_backend.cpp
@@ -34,8 +32,6 @@ add_executable(us3_turbo_access_gateway
   src/data_path/gds/cuobj_resources.cpp
   src/data_path/gds/gds_executor.cpp
   src/data_path/gds/gds_multipart_path_handler.cpp
-  src/data_path/http/http_executor.cpp
-  src/data_path/http/http_multipart_path_handler.cpp
   src/data_path/ucx/ucx_session_registry.cpp
   src/data_path/ucx/ucx_buffer_pool.cpp
   src/data_path/ucx/ucx_executor.cpp
@@ -45,7 +41,6 @@ add_executable(us3_turbo_access_gateway
 
 add_dependencies(us3_turbo_access_gateway
   us3_turbo_access_control_plane_proto
-  us3_turbo_access_http_gateway_proto
   us3_turbo_access_rdma_data_plane_proto)
 
 target_include_directories(us3_turbo_access_gateway

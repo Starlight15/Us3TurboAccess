@@ -33,31 +33,6 @@ struct Metrics {
   bvar::LatencyRecorder         gds_put_latency_us;
   bvar::LatencyRecorder         gds_get_latency_us;
 
-  // HTTP data plane（PUT / GET / HEAD 单对象路径；multipart 路径待 HTTP-multipart review 后补齐）
-  bvar::Adder<std::int64_t>     http_put_total;
-  bvar::Adder<std::int64_t>     http_get_total;
-  bvar::Adder<std::int64_t>     http_head_total;
-  bvar::Adder<std::int64_t>     http_put_fail_total;
-  bvar::Adder<std::int64_t>     http_get_fail_total;
-  bvar::Adder<std::int64_t>     http_head_fail_total;
-  bvar::Adder<std::int64_t>     http_put_bytes;
-  bvar::Adder<std::int64_t>     http_get_bytes;
-  bvar::LatencyRecorder         http_put_latency_us;
-  bvar::LatencyRecorder         http_get_latency_us;
-  bvar::LatencyRecorder         http_head_latency_us;
-  bvar::Adder<std::int64_t>     http_rejected_total;  // 503 due to max_concurrency
-
-  // HTTP inflight：与 GDS/RDMA 走 SessionStore 的"可观察"对齐。
-  // HTTP PUT/GET/HEAD 不进 SessionStore（一次 RPC 完成），用 inflight gauge
-  // 在 frontend 入口/出口 RAII 进/出，让运维看到 in-progress 请求数。
-  // 失败请求也走 RAII，inflight_aborted_total 单独计数（成功 RAII 不计数）。
-  bvar::Adder<std::int64_t>     http_put_inflight;
-  bvar::Adder<std::int64_t>     http_get_inflight;
-  bvar::Adder<std::int64_t>     http_head_inflight;
-  bvar::Adder<std::int64_t>     http_put_inflight_aborted_total;
-  bvar::Adder<std::int64_t>     http_get_inflight_aborted_total;
-  bvar::Adder<std::int64_t>     http_head_inflight_aborted_total;
-
   // Backend
   bvar::Adder<std::int64_t>     backend_write_total;
   bvar::Adder<std::int64_t>     backend_read_total;
@@ -101,30 +76,5 @@ class ScopedLatency {
   std::int64_t           start_us_;
 };
 
-/**
- * @brief RAII：构造时 inflight +1，析构时 inflight -1；MarkAborted 累计 abort 计数。
- *
- * 用法（HttpFrontend 入口）：
- *   common::ScopedHttpInflight g(common::metrics().http_put_inflight,
- *                                common::metrics().http_put_inflight_aborted_total);
- *   if (...failed) { g.MarkAborted(); return; }
- */
-class ScopedHttpInflight {
- public:
-  ScopedHttpInflight(bvar::Adder<std::int64_t>& inflight,
-                     bvar::Adder<std::int64_t>& aborted);
-  ~ScopedHttpInflight();
-
-  ScopedHttpInflight(const ScopedHttpInflight&) = delete;
-  ScopedHttpInflight& operator=(const ScopedHttpInflight&) = delete;
-
-  void MarkAborted() noexcept { aborted_ = true; }
-
- private:
-  bvar::Adder<std::int64_t>& inflight_;
-  bvar::Adder<std::int64_t>& aborted_counter_;
-  bool                       aborted_{false};
-  bool                       active_{false};  // 防止析构函数重复执行
-};
 
 }  // namespace us3_turbo_access::gateway::common

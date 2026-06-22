@@ -49,7 +49,7 @@ MetadataClient::RpcOpenTransferSession(const SessionOpening& request) const {
   rpc_request.set_bucket(request.object.bucket);
   rpc_request.set_object_key(request.object.key);
   rpc_request.set_op_type(std::string(ToString(request.operation)));
-  rpc_request.set_data_path(std::string(ToString(request.data_path)));
+  rpc_request.set_data_flow(std::string(ToString(request.data_flow)));
   rpc_request.set_buffer_type(std::string(ToString(request.buffer_type)));
   rpc_request.set_offset(request.offset);
   rpc_request.set_expected_size(request.length.value_or(0));
@@ -59,7 +59,7 @@ MetadataClient::RpcOpenTransferSession(const SessionOpening& request) const {
   us3_turbo_access::gateway::OpenSessionResponse rpc_response;
   stub_->OpenSession(&controller, &rpc_request, &rpc_response, nullptr);
 
-  auto status = CheckRpcFailure(controller, "Failed to open transfer session", request.data_path,
+  auto status = CheckRpcFailure(controller, "Failed to open transfer session", request.data_flow,
                                 request.request_id);
   if (!status.success()) {
     return Result<us3_turbo_access::gateway::OpenSessionResponse>::Failure(status.error());
@@ -89,7 +89,7 @@ Result<ObjectMetadata> MetadataClient::HeadObject(const ObjectId& object) const 
   us3_turbo_access::gateway::HeadObjectResponse rpc_response;
   stub_->HeadObject(&controller, &rpc_request, &rpc_response, nullptr);
 
-  auto status = CheckRpcFailure(controller, "HeadObject RPC failed", DataPath::kGdsCuObject, "");
+  auto status = CheckRpcFailure(controller, "HeadObject RPC failed", DataFlow::GPUDirect, "");
   if (!status.success()) {
     return Result<ObjectMetadata>::Failure(status.error());
   }
@@ -112,7 +112,7 @@ static us3_turbo_access::gateway::StartUploadRequest BuildStartUploadRequest(
   req.set_object_key(desc.object.key);
   req.set_expected_total_size(
       static_cast<std::uint64_t>(desc.expected_total_size.value_or(0)));
-  req.set_data_path(std::string(ToString(desc.data_path)));
+  req.set_data_flow(std::string(ToString(desc.data_flow)));
   req.set_idempotency_key(desc.idempotency_key);
   return req;
 }
@@ -133,7 +133,7 @@ Result<StartUploadResult> MetadataClient::RpcCreateMultipartUpload(
   auto req = BuildStartUploadRequest(desc);
   us3_turbo_access::gateway::StartUploadResponse resp;
   stub_->StartUpload(&controller, &req, &resp, nullptr);
-  auto status = CheckRpcFailure(controller, "RpcCreateMultipartUpload failed", desc.data_path, "");
+  auto status = CheckRpcFailure(controller, "RpcCreateMultipartUpload failed", desc.data_flow, "");
   if (!status.success()) {
     return Result<StartUploadResult>::Failure(status.error());
   }
@@ -146,7 +146,7 @@ Result<StartUploadResult> MetadataClient::RpcCreateMultipartUpload(
 Result<CompleteUploadOutcome> MetadataClient::RpcCompleteMultipartUpload(
     const std::string& upload_id,
     const std::vector<PartCompletion>& parts,
-    DataPath data_path) const {
+    DataFlow data_flow) const {
   if (!initialized()) {
     return Result<CompleteUploadOutcome>::Failure(MakeNotInitialized("Metadata client"));
   }
@@ -160,7 +160,7 @@ Result<CompleteUploadOutcome> MetadataClient::RpcCompleteMultipartUpload(
 
   us3_turbo_access::gateway::CompleteUploadRequest req;
   req.set_upload_id(upload_id);
-  req.set_data_path(std::string(ToString(data_path)));
+  req.set_data_flow(std::string(ToString(data_flow)));
   for (const auto& p : parts) {
     auto* pe = req.add_parts();
     pe->set_part_number(p.part_number);
@@ -169,7 +169,7 @@ Result<CompleteUploadOutcome> MetadataClient::RpcCompleteMultipartUpload(
   us3_turbo_access::gateway::CompleteUploadResponse resp;
   stub_->CompleteUpload(&controller, &req, &resp, nullptr);
   auto status = CheckRpcFailure(controller, "CompleteUpload RPC failed",
-                                data_path, "");
+                                data_flow, "");
   if (!status.success()) {
     return Result<CompleteUploadOutcome>::Failure(status.error());
   }
@@ -181,7 +181,7 @@ Result<CompleteUploadOutcome> MetadataClient::RpcCompleteMultipartUpload(
 }
 
 Result<bool> MetadataClient::RpcAbortMultipartUpload(const std::string& upload_id,
-                                          DataPath data_path) const {
+                                          DataFlow data_flow) const {
   if (!initialized()) {
     return Result<bool>::Failure(MakeNotInitialized("Metadata client"));
   }
@@ -195,11 +195,11 @@ Result<bool> MetadataClient::RpcAbortMultipartUpload(const std::string& upload_i
 
   us3_turbo_access::gateway::AbortUploadRequest req;
   req.set_upload_id(upload_id);
-  req.set_data_path(std::string(ToString(data_path)));
+  req.set_data_flow(std::string(ToString(data_flow)));
   us3_turbo_access::gateway::AbortUploadResponse resp;
   stub_->AbortUpload(&controller, &req, &resp, nullptr);
   auto status = CheckRpcFailure(controller, "AbortUpload RPC failed",
-                                data_path, "");
+                                data_flow, "");
   if (!status.success()) {
     return Result<bool>::Failure(status.error());
   }

@@ -73,7 +73,7 @@ int main(int argc, char** argv) {
   opts.endpoint          = proxy_ep;    // OpenSession → proxy
   opts.gds_data_endpoint = backend_ep;  // GdsPut     → backend
   opts.client_id         = "gds-put-split-example";
-  opts.data_path         = DataPath::kGdsCuObject;
+  opts.data_flow         = DataFlow::GPUDirect;
 
   Client client(std::move(opts));
   if (auto r = client.Initialize(); !r.success()) {
@@ -90,9 +90,9 @@ int main(int argc, char** argv) {
   }
 
   // ---- PUT（链路：OpenSession→proxy + GdsPut→backend + backend→proxy通知）----
-  RequestOptions req;
+  PutObjectRequest req;
   req.object  = ObjectId{.bucket = bucket, .key = key};
-  req.length  = bytes;  // proxy 校验 expected_size > 0
+    // proxy 校验 expected_size > 0
 
   auto put = client.PutObject(
       req, ConstBufferView{.data = dev, .size = bytes, .type = BufferType::kCudaDevice});
@@ -106,7 +106,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  std::cout << "OK path=" << ToString(put.value().selected_path)
+  std::cout << "OK path=" << ToString(put.value().selected_flow)
             << " bytes=" << put.value().bytes_transferred
             << " etag=" << put.value().etag
             << " session=" << put.value().session_id << "\n";

@@ -6,7 +6,6 @@
 #include <spdlog/logger.h>
 
 #include "api/control_plane_service.h"
-#include "api/http_frontend.h"
 #include "api/rdma_data_plane_service.h"
 #include "backend/composite_backend.h"
 #include "backend/memory_data_store.h"
@@ -27,8 +26,6 @@
 #include "data_path/ucx/ucx_executor.h"
 #include "data_path/ucx/ucx_multipart_path_handler.h"
 #include "runtime/io_worker_pool.h"
-#include "data_path/http/http_executor.h"
-#include "data_path/http/http_multipart_path_handler.h"
 #include "common/error.h"
 #include "common/log.h"
 
@@ -39,7 +36,6 @@ namespace {
 std::unique_ptr<backend::IBackend> MakeBackend(const GatewayOptions& opts) {
   switch (opts.backend_kind) {
     case BackendKind::kMemory:
-      // 内存 backend 现在走 composite：MemoryIndex + MemoryData。
       return std::make_unique<backend::CompositeBackend>(
           std::make_unique<backend::MemoryIndexStore>(),
           std::make_unique<backend::MemoryDataStore>(opts.backend_capacity));
@@ -74,7 +70,6 @@ Result<bool> GatewayRuntime::Initialize() {
   logger_ = common::EnsureLogger(options_.logger);
   options_.logger = logger_;
 
-
   // backend 是所有上层模块的依赖根。
   backend_ = MakeBackend(options_);
   sessions_ = std::make_unique<core::SessionStore>(
@@ -89,10 +84,6 @@ Result<bool> GatewayRuntime::Initialize() {
       options_.multipart_min_part_size, logger_);
   multipart_app_ = std::make_unique<core::multipart::MultipartAppService>(
       *multipart_coordinator_, logger_);
-  http_executor_ = std::make_unique<data_path::http::HttpExecutor>(
-      *backend_, logger_);
-  http_multipart_handler_ = std::make_unique<data_path::http::HttpMultipartPathHandler>(
-      *http_executor_, *multipart_coordinator_, logger_);
   io_pool_ = std::make_unique<runtime::IoWorkerPool>(
       static_cast<std::size_t>(std::max(1, options_.io_worker_threads)));
 
@@ -100,49 +91,44 @@ Result<bool> GatewayRuntime::Initialize() {
   if (options_.gds_enable) {
     const std::string gds_bind =
         options_.bind_host == "0.0.0.0" ? options_.public_host : options_.bind_host;
-    gds_executor_ = std::make_unique<data_path::gds::GdsExecutor>(
+    gds_executor_ = std::make_unique<data_flow::gds::GdsExecutor>(
         options_.public_host, gds_bind, options_.gds, *backend_, *metadata_,
         logger_);
     auto started = gds_executor_->Start();
     if (!started.success()) {
       return Result<bool>::Failure(started.error());
     }
-    gds_multipart_handler_ = std::make_unique<data_path::gds::GdsMultipartPathHandler>(
+    gds_multipart_handler_ = std::make_unique<data_flow::gds::GdsMultipartPathHandler>(
         *gds_executor_, *multipart_coordinator_, logger_);
   }
 
-  // UCX 数据通路（kNativeRdma DataPath）。
+  // UCX 数据通路（CPUDirect DataFlow）。
   if (options_.ucx_enable) {
     const std::string ucx_bind =
         options_.bind_host == "0.0.0.0" ? options_.public_host : options_.bind_host;
-    ucx_executor_ = std::make_unique<data_path::ucx::UcxExecutor>(
+    ucx_executor_ = std::make_unique<data_flow::ucx::UcxExecutor>(
         options_.public_host, ucx_bind, options_.ucx, *backend_, *metadata_,
         logger_);
     auto started = ucx_executor_->Start();
     if (!started.success()) {
       return Result<bool>::Failure(started.error());
     }
-    ucx_multipart_handler_ = std::make_unique<data_path::ucx::UcxMultipartPathHandler>(
+    ucx_multipart_handler_ = std::make_unique<data_flow::ucx::UcxMultipartPathHandler>(
         *ucx_executor_, *multipart_coordinator_, logger_);
   }
 
   session_opener_ = std::make_unique<core::SessionOpener>(
-      *sessions_, http_executor_.get(), gds_executor_.get(),
-      ucx_executor_.get(), logger_);
+      *sessions_, gds_executor_.get(), ucx_executor_.get(), logger_);
 
   control_plane_ = std::make_unique<api::ControlPlaneService>(
       *session_app_, *metadata_, *session_opener_, gds_executor_.get(),
       gds_multipart_handler_.get(),
       *multipart_app_, *io_pool_, logger_);
-  http_frontend_ = std::make_unique<api::HttpFrontend>(
-      options_.gateway_id, *metadata_, *http_executor_,
-      *http_multipart_handler_, *multipart_app_, options_.http_max_put_bytes, logger_);
 
   brpc::ServerOptions server_options;
   server_options.idle_timeout_sec = options_.idle_timeout_sec;
   server_options.num_threads = options_.num_threads;
   server_options.max_concurrency = options_.max_concurrency;
-  server_options.http_master_service = http_frontend_.get();
 
   if (server_.AddService(control_plane_.get(),
                          brpc::SERVER_DOESNT_OWN_SERVICE) != 0) {
@@ -168,8 +154,6 @@ Result<bool> GatewayRuntime::Initialize() {
         ErrorCode::kInternal,
         "failed to start brpc server on " + bind_endpoint));
   }
-  // brpc 接管 http_master_service 所有权，release 防止双 free。
-  http_frontend_.release();
 
   // 所有依赖就绪后再启动 sweeper。
   session_sweeper_ = std::make_unique<core::SessionSweeper>(
@@ -208,7 +192,6 @@ void GatewayRuntime::Shutdown() {
   session_sweeper_.reset();
   control_plane_.reset();
   rdma_data_plane_.reset();
-  http_frontend_.reset();  // typically already released to brpc; safe no-op.
   session_opener_.reset();
   gds_multipart_handler_.reset();
   if (gds_executor_ != nullptr) {
@@ -217,17 +200,12 @@ void GatewayRuntime::Shutdown() {
   gds_executor_.reset();
   // UCX: must stop the executor (which joins the progress thread and
   // drains all pending_commit callbacks) BEFORE destroying the handler.
-  // The handler's async callbacks no longer capture `this`, but the
-  // executor's Stop() must complete so no callbacks are in flight when
-  // we tear down the rest.
   if (ucx_executor_ != nullptr) {
     ucx_executor_->Stop();
   }
   ucx_multipart_handler_.reset();
   ucx_executor_.reset();
   io_pool_.reset();
-  http_multipart_handler_.reset();
-  http_executor_.reset();
   multipart_app_.reset();
   multipart_coordinator_.reset();
   multipart_store_.reset();

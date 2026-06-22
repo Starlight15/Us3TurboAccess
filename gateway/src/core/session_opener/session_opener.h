@@ -11,9 +11,9 @@ namespace us3_turbo_access::gateway::core {
 class SessionStore;
 }  // namespace us3_turbo_access::gateway::core
 
-namespace us3_turbo_access::gateway::data_path {
+namespace us3_turbo_access::gateway::data_flow {
 class IDataPathExecutor;
-}  // namespace us3_turbo_access::gateway::data_path
+}  // namespace us3_turbo_access::gateway::data_flow
 
 namespace us3_turbo_access::gateway::core {
 
@@ -34,9 +34,8 @@ struct OpenSessionResult {
 class SessionOpener {
  public:
   SessionOpener(SessionStore& sessions,
-                data_path::IDataPathExecutor* http_executor,
-                data_path::IDataPathExecutor* gds_executor,
-                data_path::IDataPathExecutor* rdma_executor,
+                data_flow::IDataPathExecutor* gds_executor,
+                data_flow::IDataPathExecutor* rdma_executor,
                 std::shared_ptr<spdlog::logger> logger);
 
   SessionOpener(const SessionOpener&) = delete;
@@ -45,12 +44,11 @@ class SessionOpener {
   [[nodiscard]] Result<OpenSessionResult> Open(const OpenSessionParams& req);
 
  private:
-  [[nodiscard]] data_path::IDataPathExecutor* SelectExecutor(DataPath path) const;
+  [[nodiscard]] data_flow::IDataPathExecutor* SelectExecutor(DataFlow path) const;
 
   SessionStore&                       sessions_;
-  data_path::IDataPathExecutor*       http_executor_{nullptr};
-  data_path::IDataPathExecutor*       gds_executor_{nullptr};
-  data_path::IDataPathExecutor*       rdma_executor_{nullptr};
+  data_flow::IDataPathExecutor*       gds_executor_{nullptr};
+  data_flow::IDataPathExecutor*       rdma_executor_{nullptr};
   std::shared_ptr<spdlog::logger>     logger_;
 };
 

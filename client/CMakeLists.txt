@@ -17,16 +17,12 @@ add_library(us3_turbo_access_client
   src/core/metrics/client_metrics.cpp
   src/core/upload/upload_coordinator.cpp
   src/core/gds/gds_multipart_flow.cpp
-  src/core/http/http_multipart_flow.cpp
   src/core/rdma/rdma_multipart_flow.cpp
   src/core/gds/gds_transfer_path.cpp
   src/core/rdma/rdma_transfer_path.cpp
-  src/core/http/http_transfer_path.cpp
   src/control/metadata_client.cpp
   src/data/gds_data_client.cpp
   src/data/rdma_data_plane_client.cpp
-  src/data/http_data_client.cpp
-  src/data/http_crc32c.cpp
   src/transports/gds/gds_memory_registry.cpp
   src/transports/gds/cuobj_library.cpp
   src/transports/gds/chunk_dispatcher.cpp
@@ -34,8 +30,7 @@ add_library(us3_turbo_access_client
   src/transports/ucx/ucx_context.cpp
   src/transports/ucx/ucx_worker.cpp
   src/transports/ucx/ucx_endpoint.cpp
-  src/transports/ucx/ucx_endpoint_pool.cpp
-  src/transports/http/http_channel.cpp)
+  src/transports/ucx/ucx_endpoint_pool.cpp)
 
 add_dependencies(us3_turbo_access_client
   us3_turbo_access_control_plane_proto

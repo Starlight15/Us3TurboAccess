@@ -16,15 +16,15 @@
 
 class cuObjServer;
 
-namespace us3_turbo_access::gateway::data_path::gds {
+namespace us3_turbo_access::gateway::data_flow::gds {
 class PinnedBufferPool;
-}  // namespace us3_turbo_access::gateway::data_path::gds
+}  // namespace us3_turbo_access::gateway::data_flow::gds
 
 namespace us3_turbo_access::gateway::core {
 class MetadataService;
 }  // namespace us3_turbo_access::gateway::core
 
-namespace us3_turbo_access::gateway::data_path::gds {
+namespace us3_turbo_access::gateway::data_flow::gds {
 
 /**
  * @brief GDS / cuObject server-side data-path executor.
@@ -42,8 +42,8 @@ class GdsExecutor final : public IDataPathExecutor {
               std::shared_ptr<spdlog::logger> logger);
   ~GdsExecutor() override;
 
-  [[nodiscard]] DataPath kind() const noexcept override {
-    return DataPath::kGdsCuObject;
+  [[nodiscard]] DataFlow kind() const noexcept override {
+    return DataFlow::GPUDirect;
   }
   [[nodiscard]] bool        available() const override;
   [[nodiscard]] std::string endpoint() const override;
@@ -121,4 +121,4 @@ class GdsExecutor final : public IDataPathExecutor {
   std::shared_ptr<PinnedBufferPool> buffer_pool_;
 };
 
-}  // namespace us3_turbo_access::gateway::data_path::gds
+}  // namespace us3_turbo_access::gateway::data_flow::gds

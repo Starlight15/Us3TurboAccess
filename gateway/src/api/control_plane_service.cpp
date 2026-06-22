@@ -44,7 +44,7 @@ void FillGdsResponse(const std::string& gateway_id,
   req.bucket = request.bucket();
   req.object_key = request.object_key();
   req.op = ParseOperationType(request.op_type());
-  req.data_path = ParseDataPath(request.data_path());
+  req.data_flow = ParseDataFlow(request.data_flow());
   req.buffer_type = request.buffer_type();
   req.offset = request.offset();
   req.expected_size = request.expected_size();
@@ -102,8 +102,8 @@ ControlPlaneService::PrepareGdsChunk(
 ControlPlaneService::ControlPlaneService(core::SessionAppService& session_app,
                                          core::MetadataService& metadata,
                                          core::SessionOpener& session_opener,
-                                         data_path::gds::GdsExecutor* gds_executor,
-                                         data_path::gds::GdsMultipartPathHandler* gds_multipart_handler,
+                                         data_flow::gds::GdsExecutor* gds_executor,
+                                         data_flow::gds::GdsMultipartPathHandler* gds_multipart_handler,
                                          core::multipart::MultipartAppService& multipart_app,
                                          runtime::IoWorkerPool& io_pool,
                                          std::shared_ptr<spdlog::logger> logger)
@@ -306,7 +306,7 @@ void ControlPlaneService::CompleteUpload(
   auto* cntl = static_cast<brpc::Controller*>(cntl_base);
   auto parts = ToPartRecords(request->parts());
   auto meta = multipart_app_.CompleteUpload(request->upload_id(), parts,
-                                        request->data_path());
+                                        request->data_flow());
   if (!meta.success()) {
     cntl->SetFailed(meta.error().message);
     return;
@@ -324,7 +324,7 @@ void ControlPlaneService::AbortUpload(
   brpc::ClosureGuard done_guard(done);
   auto* cntl = static_cast<brpc::Controller*>(cntl_base);
   auto result = multipart_app_.AbortUpload(request->upload_id(),
-                                       request->data_path());
+                                       request->data_flow());
   if (!result.success()) {
     cntl->SetFailed(result.error().message);
     return;

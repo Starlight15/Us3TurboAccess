@@ -21,7 +21,7 @@
 #include "core/metadata/metadata_service.h"
 #include "core/session/session.h"
 
-namespace us3_turbo_access::gateway::data_path::ucx {
+namespace us3_turbo_access::gateway::data_flow::ucx {
 
 namespace {
 
@@ -581,4 +581,4 @@ Result<bool> UcxExecutor::AbortSession(std::string_view session_id) {
   return Result<bool>::Success(entry != nullptr);
 }
 
-}  // namespace us3_turbo_access::gateway::data_path::ucx
+}  // namespace us3_turbo_access::gateway::data_flow::ucx

@@ -31,7 +31,7 @@ PlatformCapabilities DetectPlatformCapabilities(const ClientOptions& options) {
                                 LibraryAvailable("libcudart.so");
   caps.gpu_available = std::filesystem::exists("/dev/nvidia0");
   caps.cuobject_available =
-      options.data_path == DataPath::kGdsCuObject && caps.cuda_runtime_available &&
+      options.data_flow == DataFlow::GPUDirect && caps.cuda_runtime_available &&
       LibraryAvailable("libcufile.so");
   return caps;
 }

@@ -37,7 +37,7 @@ struct MultipartUpload {
   std::string                     upload_id;
   std::string                     bucket;
   std::string                     object_key;
-  std::string                     data_path;
+  std::string                     data_flow;
   std::optional<std::size_t>      expected_total_size;
   std::string                     backend_upload_id;
 

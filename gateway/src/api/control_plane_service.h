@@ -26,10 +26,10 @@ namespace us3_turbo_access::gateway::core::multipart {
 class MultipartAppService;
 }  // namespace us3_turbo_access::gateway::core::multipart
 
-namespace us3_turbo_access::gateway::data_path::gds {
+namespace us3_turbo_access::gateway::data_flow::gds {
 class GdsExecutor;
 class GdsMultipartPathHandler;
-}  // namespace us3_turbo_access::gateway::data_path::gds
+}  // namespace us3_turbo_access::gateway::data_flow::gds
 
 namespace us3_turbo_access::gateway::runtime {
 class IoWorkerPool;
@@ -48,17 +48,17 @@ namespace us3_turbo_access::gateway::api {
  *
  *   - Session lifecycle    → @ref core::SessionAppService
  *   - Multipart control    → @ref core::multipart::MultipartAppService
- *   - GDS multipart part   → @ref data_path::gds::GdsMultipartPathHandler
+ *   - GDS multipart part   → @ref data_flow::gds::GdsMultipartPathHandler
  *   - Session opening      → @ref core::SessionOpener
- *   - GDS data path        → @ref data_path::gds::GdsExecutor
+ *   - GDS data path        → @ref data_flow::gds::GdsExecutor
  */
 class ControlPlaneService final : public ::us3_turbo_access::gateway::ControlPlaneService {
  public:
   ControlPlaneService(core::SessionAppService& session_app,
                       core::MetadataService& metadata,
                       core::SessionOpener& session_opener,
-                      data_path::gds::GdsExecutor* gds_executor,
-                      data_path::gds::GdsMultipartPathHandler* gds_multipart_handler,
+                      data_flow::gds::GdsExecutor* gds_executor,
+                      data_flow::gds::GdsMultipartPathHandler* gds_multipart_handler,
                       core::multipart::MultipartAppService& multipart_app,
                       runtime::IoWorkerPool& io_pool,
                       std::shared_ptr<spdlog::logger> logger);
@@ -141,8 +141,8 @@ class ControlPlaneService final : public ::us3_turbo_access::gateway::ControlPla
   core::SessionAppService&                          session_app_;
   core::MetadataService&                            metadata_;
   core::SessionOpener&                              session_opener_;
-  data_path::gds::GdsExecutor*                      gds_executor_{nullptr};
-  data_path::gds::GdsMultipartPathHandler*          gds_multipart_handler_{nullptr};
+  data_flow::gds::GdsExecutor*                      gds_executor_{nullptr};
+  data_flow::gds::GdsMultipartPathHandler*          gds_multipart_handler_{nullptr};
   core::multipart::MultipartAppService&             multipart_app_;
   runtime::IoWorkerPool&                            io_pool_;
   std::shared_ptr<spdlog::logger>                   logger_;

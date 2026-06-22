@@ -11,19 +11,20 @@ std::string_view ToString(OperationType op) noexcept {
   return "UNKNOWN";
 }
 
-std::string_view ToString(DataPath path) noexcept {
-  switch (path) {
-    case DataPath::kHttpTcp:     return "http-tcp";
-    case DataPath::kNativeRdma:  return "native-rdma";
-    case DataPath::kGdsCuObject: return "gds-cuobject";
+std::string_view ToString(DataFlow flow) noexcept {
+  switch (flow) {
+    case DataFlow::NONE:       return "none";
+    case DataFlow::CPUDirect:  return "cpu-direct";
+    case DataFlow::GPUDirect:  return "gpu-direct";
   }
   return "unknown";
 }
 
-DataPath ParseDataPath(std::string_view text) noexcept {
-  if (text == "gds-cuobject") return DataPath::kGdsCuObject;
-  if (text == "native-rdma")  return DataPath::kNativeRdma;
-  return DataPath::kHttpTcp;
+DataFlow ParseDataFlow(std::string_view text) noexcept {
+  if (text == "gpu-direct") return DataFlow::GPUDirect;
+  if (text == "cpu-direct") return DataFlow::CPUDirect;
+  if (text == "none")       return DataFlow::NONE;
+  return DataFlow::NONE;
 }
 
 OperationType ParseOperationType(std::string_view text) noexcept {

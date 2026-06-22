@@ -11,7 +11,7 @@ namespace us3_turbo_access::proxy {
  * - 10xxx：参数错误
  * - 11xxx：session 错误
  * - 12xxx：backend 错误
- * - 13xxx：路由 / data_path 错误
+ * - 13xxx：路由 / data_flow 错误
  * - 90xxx：占位 / 未实现
  */
 constexpr int PROXY_ERR_INVALID_PARAM        = 10001;
@@ -30,7 +30,7 @@ constexpr std::string_view ErrorMessage(int code) {
     case PROXY_ERR_SESSION_NOT_FOUND:   return "session not found";
     case PROXY_ERR_BACKEND_UNAVAILABLE: return "no backend available";
     case PROXY_ERR_BACKEND_RPC:         return "backend rpc failed";
-    case PROXY_ERR_UNSUPPORTED_PATH:    return "unsupported data_path";
+    case PROXY_ERR_UNSUPPORTED_PATH:    return "unsupported data_flow";
     case PROXY_ERR_NOT_IMPLEMENTED:     return "not implemented in proxy v1";
     default:                            return "unknown error";
   }

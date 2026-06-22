@@ -23,11 +23,11 @@ class GdsTransferPath final : public TransferPath {
   GdsTransferPath(const PlatformCapabilities& caps, const GdsContext& context,
                   ExecutorProvider executor_provider = nullptr);
 
-  [[nodiscard]] DataPath path() const override;
+  [[nodiscard]] DataFlow path() const override;
   [[nodiscard]] bool available() const override;
-  [[nodiscard]] Result<TransferOutcome> GetObject(const RequestOptions& request,
+  [[nodiscard]] Result<TransferOutcome> GetObject(const GetObjectRequest& request,
                                                   MutableBufferView buffer) const override;
-  [[nodiscard]] Result<TransferOutcome> PutObject(const RequestOptions& request,
+  [[nodiscard]] Result<TransferOutcome> PutObject(const PutObjectRequest& request,
                                                   ConstBufferView buffer) const override;
 
   /**
@@ -39,18 +39,18 @@ class GdsTransferPath final : public TransferPath {
    * 返回的 TransferOutcome.etag 是 part_etag。
    */
   [[nodiscard]] Result<TransferOutcome>
-    PutObjectPart(const RequestOptions& request, ConstBufferView buffer,
+    PutObjectPart(const PutObjectRequest& request, ConstBufferView buffer,
                   const std::string& upload_id,
                   std::uint32_t part_number) const;
 
  private:
   // 单连接降级：length 小 / 并发不够 / executor 未就绪 时走这条路径。
   [[nodiscard]] Result<TransferOutcome>
-    GetObjectSingle(const RequestOptions& request,
+    GetObjectSingle(const GetObjectRequest& request,
                     MutableBufferView buffer) const;
   // 并发分片：把 [offset, offset+length) 切 N 块，各自独立 OpenSession + Get。
   [[nodiscard]] Result<TransferOutcome>
-    GetObjectParallel(const RequestOptions& request,
+    GetObjectParallel(const GetObjectRequest& request,
                       MutableBufferView buffer,
                       ClientExecutor& executor) const;
 

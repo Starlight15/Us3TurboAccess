@@ -22,17 +22,16 @@ namespace us3_turbo_access::client {
 using ErrorCode = ::us3_turbo_access::common::ErrorCode;
 
 /**
- * @brief Data transfer paths supported by the client.
+ * @brief Data flow types supported by the client.
  *
- * kHttpTcp talks standard HTTP/1.1 to the gateway's http_master_service and
- * only accepts BufferType::kHostRegular. kGdsCuObject and kNativeRdma are
- * independent transports with their own buffer-type requirements (cuda
- * device memory for GDS, host-pinned for RDMA).
+ * NONE: No data flow selected (default, will be negotiated).
+ * GPUDirect: RDMA via cuObjServer (CUDA device memory, GDS).
+ * CPUDirect: UCX RDMA (host-pinned memory, native RDMA).
  */
-enum class DataPath {
-  kGdsCuObject,
-  kNativeRdma,
-  kHttpTcp,
+enum class DataFlow {
+  NONE,
+  GPUDirect,
+  CPUDirect,
 };
 
 /**
@@ -64,13 +63,13 @@ struct ObjectId {
 /**
  * @brief Object identity + request context packed together for upload/multipart chains.
  *
- * Use this to pass the common trio (object, data_path, request attributes) as a
+ * Use this to pass the common trio (object, data_flow, request attributes) as a
  * single argument instead of repeating individual fields across layers.
  * ObjectId is kept separate and continues to represent pure object identity.
  */
 struct ObjectDescriptor {
   ObjectId    object;
-  DataPath    data_path{DataPath::kGdsCuObject};
+  DataFlow    data_flow{DataFlow::NONE};
   std::string checksum_policy{"none"};
 
   std::optional<std::uint64_t> offset;
@@ -86,7 +85,7 @@ struct ObjectDescriptor {
 struct TransferProgress {
   std::size_t bytes_completed{0};
   std::size_t bytes_total{0};
-  DataPath data_path{DataPath::kGdsCuObject};
+  DataFlow data_flow{DataFlow::NONE};
 };
 
 /**
@@ -95,17 +94,37 @@ struct TransferProgress {
 using ProgressCallback = std::function<void(const TransferProgress&)>;
 
 /**
- * @brief Per-request options for object transfer operations.
+ * @brief Request parameters for PutObject operations.
  */
-struct RequestOptions {
+struct PutObjectRequest {
   ObjectId object;
-  std::uint64_t offset{0};                 /**< Starting byte offset within the object. */
-  std::optional<std::uint64_t> length;    /**< Requested byte count; empty means to the end. */
   std::chrono::milliseconds timeout{std::chrono::milliseconds(30000)};
   std::unordered_map<std::string, std::string> extra_headers;
   std::string checksum_policy{"none"};   /**< Checksum policy name sent to the service. */
   std::string idempotency_key;            /**< Caller-supplied idempotency token. */
   ProgressCallback progress_callback;
+};
+
+/**
+ * @brief Request parameters for GetObject operations.
+ */
+struct GetObjectRequest {
+  ObjectId object;
+  std::uint64_t offset{0};                 /**< Starting byte offset within the object. */
+  std::optional<std::uint64_t> length;    /**< Requested byte count; empty means to the end. */
+  std::chrono::milliseconds timeout{std::chrono::milliseconds(30000)};
+  std::unordered_map<std::string, std::string> extra_headers;
+  std::string checksum_policy{"none"};
+  ProgressCallback progress_callback;
+};
+
+/**
+ * @brief Request parameters for HeadObject operations.
+ */
+struct HeadObjectRequest {
+  ObjectId object;
+  std::chrono::milliseconds timeout{std::chrono::milliseconds(30000)};
+  std::unordered_map<std::string, std::string> extra_headers;
 };
 
 /**
@@ -140,8 +159,8 @@ struct ObjectMetadata {
  * @brief Transfer result returned by successful upload and download operations.
  */
 struct TransferOutcome {
-  /** Data path actually used for the transfer (may differ from request). */
-  DataPath selected_path{DataPath::kGdsCuObject};
+  /** Data flow actually used for the transfer (may differ from request). */
+  DataFlow selected_flow{DataFlow::NONE};
   /** Total bytes transferred. */
   std::size_t bytes_transferred{0};
   /** Service-side request identifier, useful for log correlation. */
@@ -194,8 +213,8 @@ struct PlatformCapabilities {
   bool cuobject_available{false};      /**< GDS/cuObject prerequisites are available locally. */
 };
 
-/** @brief Returns a stable string identifier for the data path. */
-[[nodiscard]] std::string_view ToString(DataPath path);
+/** @brief Returns a stable string identifier for the data flow. */
+[[nodiscard]] std::string_view ToString(DataFlow flow);
 /** @brief Returns a stable string identifier for the buffer type. */
 [[nodiscard]] std::string_view ToString(BufferType type);
 /** @brief Returns a stable string identifier for the operation type. */

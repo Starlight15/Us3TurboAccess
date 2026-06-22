@@ -8,7 +8,7 @@
 
 #include <ucp/api/ucp.h>
 
-namespace us3_turbo_access::gateway::data_path::ucx {
+namespace us3_turbo_access::gateway::data_flow::ucx {
 
 /**
  * 已注册 MR 的 buffer slot。
@@ -64,4 +64,4 @@ class UcxBufferPool {
   std::deque<RegisteredBuffer*> pool_;
 };
 
-}  // namespace us3_turbo_access::gateway::data_path::ucx
+}  // namespace us3_turbo_access::gateway::data_flow::ucx

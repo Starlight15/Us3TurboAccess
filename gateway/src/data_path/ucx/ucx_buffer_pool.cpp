@@ -3,7 +3,7 @@
 #include <cstdlib>
 #include <sys/mman.h>
 
-namespace us3_turbo_access::gateway::data_path::ucx {
+namespace us3_turbo_access::gateway::data_flow::ucx {
 
 RegisteredBuffer* UcxBufferPool::Acquire(std::size_t requested_size) {
   std::lock_guard<std::mutex> lk(mu_);
@@ -42,4 +42,4 @@ void UcxBufferPool::Drain() noexcept {
   pool_.clear();
 }
 
-}  // namespace us3_turbo_access::gateway::data_path::ucx
+}  // namespace us3_turbo_access::gateway::data_flow::ucx

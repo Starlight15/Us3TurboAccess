@@ -140,7 +140,7 @@ struct ClientOptions {
    */
   std::string gds_data_endpoint;
   /** Data transport selected for transfer operations. */
-  DataPath data_path{DataPath::kGdsCuObject};
+  DataFlow data_flow{DataFlow::NONE};
   /** Optional logger; if null, the client falls back to a null sink. */
   std::shared_ptr<spdlog::logger> logger;
 

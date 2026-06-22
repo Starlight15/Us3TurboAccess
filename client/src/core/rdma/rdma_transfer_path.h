@@ -40,17 +40,17 @@ class RdmaTransferPath final : public TransferPath {
 
   void SetAvailable(bool available) noexcept;
 
-  [[nodiscard]] DataPath path() const override;
+  [[nodiscard]] DataFlow path() const override;
   [[nodiscard]] bool     available() const override;
 
   [[nodiscard]] Result<TransferOutcome>
-    GetObject(const RequestOptions& request, MutableBufferView buffer) const override;
+    GetObject(const GetObjectRequest& request, MutableBufferView buffer) const override;
 
   [[nodiscard]] Result<TransferOutcome>
-    PutObject(const RequestOptions& request, ConstBufferView buffer) const override;
+    PutObject(const PutObjectRequest& request, ConstBufferView buffer) const override;
 
   [[nodiscard]] Result<TransferOutcome>
-    PutObjectPart(const RequestOptions& request, ConstBufferView buffer,
+    PutObjectPart(const PutObjectRequest& request, ConstBufferView buffer,
                   const std::string& upload_id, std::uint32_t part_number) const;
 
  private:
@@ -101,7 +101,7 @@ class RdmaTransferPath final : public TransferPath {
   };
 
   [[nodiscard]] Result<WritePrepared>
-    PrepareAndWrite(const RequestOptions& request,
+    PrepareAndWrite(const PutObjectRequest& request,
                     ConstBufferView buffer,
                     bool is_multipart_part,
                     std::chrono::steady_clock::time_point deadline) const;

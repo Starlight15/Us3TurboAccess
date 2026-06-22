@@ -34,7 +34,7 @@ Result<StartUploadResult> MultipartCoordinator::CreateUpload(
   MultipartStore::CreateParams cp;
   cp.bucket = params.bucket;
   cp.object_key = params.object_key;
-  cp.data_path = params.data_path;
+  cp.data_flow = params.data_flow;
   cp.expected_total_size = params.expected_total_size;
   cp.backend_upload_id = backend_id.value();
   auto upload = store_.Create(cp);
@@ -53,7 +53,7 @@ Result<StartUploadResult> MultipartCoordinator::CreateUpload(
 // 提交 multipart upload。
 // 并发保护：state CAS 到 kCompleting 抢占 owner，重复 Complete 被拒。
 // 校验：part_number 1..N 连续；非末尾 part >= min_part_size；etag 与记录一致。
-// data_path 校验：必须与 StartUpload 时一致，防止跨协议串扰。
+// data_flow 校验：必须与 StartUpload 时一致，防止跨协议串扰。
 Result<ObjectMetadata> MultipartCoordinator::CompleteUpload(
     std::string_view upload_id,
     const std::vector<backend::PartRecord>& parts,
@@ -75,12 +75,12 @@ Result<ObjectMetadata> MultipartCoordinator::CompleteUpload(
   std::map<std::uint32_t, PartProgress> recorded_parts;
   {
     std::scoped_lock lock(upload->mu);
-    // data_path 校验：必须与 StartUpload 时一致
-    if (upload->data_path != expected_data_path) {
+    // data_flow 校验：必须与 StartUpload 时一致
+    if (upload->data_flow != expected_data_path) {
       common::metrics().multipart_fail_total << 1;
       return Result<ObjectMetadata>::Failure(common::MakeError(
           ErrorCode::kBadRequest,
-          "upload was started on data_path '" + upload->data_path +
+          "upload was started on data_flow '" + upload->data_flow +
               "', cannot complete via '" + std::string(expected_data_path) + "'"));
     }
     if (upload->state != State::kActive) {
@@ -186,12 +186,12 @@ Result<bool> MultipartCoordinator::AbortUpload(std::string_view upload_id,
   std::string backend_id;
   {
     std::scoped_lock lock(upload->mu);
-    // data_path 校验：必须与 StartUpload 时一致
-    if (upload->data_path != expected_data_path) {
+    // data_flow 校验：必须与 StartUpload 时一致
+    if (upload->data_flow != expected_data_path) {
       common::metrics().multipart_fail_total << 1;
       return Result<bool>::Failure(common::MakeError(
           ErrorCode::kBadRequest,
-          "upload was started on data_path '" + upload->data_path +
+          "upload was started on data_flow '" + upload->data_flow +
               "', cannot abort via '" + std::string(expected_data_path) + "'"));
     }
     backend_id = upload->backend_upload_id;

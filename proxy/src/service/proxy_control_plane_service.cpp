@@ -13,7 +13,7 @@ namespace us3_turbo_access::proxy {
 
 namespace {
 
-// GDS 通道标识，与 client DataPath::kGdsCuObject → ToString("gds-cuobject") 一致。
+// GDS 通道标识，与 client DataFlow::GPUDirect → ToString("gds-cuobject") 一致。
 constexpr std::string_view kGdsDataPath = "gds-cuobject";
 constexpr std::string_view kOpTypePut   = "PUT";
 
@@ -36,10 +36,10 @@ void ProxyControlPlaneService::OpenSession(
   auto* cntl = static_cast<brpc::Controller*>(cntl_base);
 
   // ---- 校验 ----
-  if (request->data_path() != kGdsDataPath) {
+  if (request->data_flow() != kGdsDataPath) {
     cntl->SetFailed(PROXY_ERR_UNSUPPORTED_PATH,
-                    "proxy v1 only accepts data_path=gds-cuobject, got: %s",
-                    request->data_path().c_str());
+                    "proxy v1 only accepts data_flow=gds-cuobject, got: %s",
+                    request->data_flow().c_str());
     return;
   }
   if (request->op_type() != kOpTypePut) {

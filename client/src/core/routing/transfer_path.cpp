@@ -19,7 +19,7 @@ namespace {
 
 }  // namespace
 
-Result<bool> TransferPath::CommonPreflight(DataPath path_for_error,
+Result<bool> TransferPath::CommonPreflight(DataFlow path_for_error,
                                             std::string_view path_name,
                                             bool available, BufferType actual,
                                             BufferType required) {

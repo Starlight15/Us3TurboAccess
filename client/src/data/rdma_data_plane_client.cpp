@@ -49,7 +49,7 @@ Result<RdmaDiscoverInfo> RdmaDataPlaneClient::PrepareTransfer(
   us3_turbo_access::gateway::RdmaDiscoverResponse resp;
   stub_->DiscoverRdmaEndpoint(&controller, &req, &resp, nullptr);
   auto status = CheckRpcFailure(controller, "PrepareTransfer RPC failed",
-                                DataPath::kNativeRdma, "");
+                                DataFlow::CPUDirect, "");
   if (!status.success()) {
     return Result<RdmaDiscoverInfo>::Failure(status.error());
   }
@@ -83,7 +83,7 @@ Result<RdmaCommitInfo> RdmaDataPlaneClient::CommitObject(
   us3_turbo_access::gateway::RdmaCommitResponse resp;
   stub_->CommitObject(&controller, &req, &resp, nullptr);
   auto status = CheckRpcFailure(controller, "CommitObject RPC failed",
-                                DataPath::kNativeRdma, "");
+                                DataFlow::CPUDirect, "");
   if (!status.success()) {
     return Result<RdmaCommitInfo>::Failure(status.error());
   }
@@ -105,7 +105,7 @@ Result<bool> RdmaDataPlaneClient::AbortSession(
   us3_turbo_access::gateway::RdmaAbortResponse resp;
   stub_->AbortSession(&controller, &req, &resp, nullptr);
   auto status = CheckRpcFailure(controller, "AbortSession RPC failed",
-                                DataPath::kNativeRdma, "");
+                                DataFlow::CPUDirect, "");
   if (!status.success()) {
     return Result<bool>::Failure(status.error());
   }
@@ -132,7 +132,7 @@ Result<RdmaCommitPartInfo> RdmaDataPlaneClient::CommitPart(
   us3_turbo_access::gateway::RdmaCommitPartResponse resp;
   stub_->CommitPart(&controller, &req, &resp, nullptr);
   auto status = CheckRpcFailure(controller, "CommitPart RPC failed",
-                                DataPath::kNativeRdma, "");
+                                DataFlow::CPUDirect, "");
   if (!status.success()) {
     return Result<RdmaCommitPartInfo>::Failure(status.error());
   }

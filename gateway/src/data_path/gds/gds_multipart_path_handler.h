@@ -17,11 +17,11 @@ namespace us3_turbo_access::gateway::core::multipart {
 class MultipartCoordinator;
 }  // namespace us3_turbo_access::gateway::core::multipart
 
-namespace us3_turbo_access::gateway::data_path::gds {
+namespace us3_turbo_access::gateway::data_flow::gds {
 class GdsExecutor;
-}  // namespace us3_turbo_access::gateway::data_path::gds
+}  // namespace us3_turbo_access::gateway::data_flow::gds
 
-namespace us3_turbo_access::gateway::data_path::gds {
+namespace us3_turbo_access::gateway::data_flow::gds {
 
 /**
  * @brief Result of a GDS multipart part upload.
@@ -81,4 +81,4 @@ class GdsMultipartPathHandler final {
   std::shared_ptr<spdlog::logger>               logger_;
 };
 
-}  // namespace us3_turbo_access::gateway::data_path::gds
+}  // namespace us3_turbo_access::gateway::data_flow::gds

@@ -7,7 +7,6 @@
 #include "client/src/core/common/errors.h"
 #include "client/src/core/contracts/request_builder.h"
 #include "client/src/core/routing/retry_policy.h"
-#include "client/src/data/http_crc32c.h"
 #include "client/src/transports/ucx/ucx_endpoint.h"
 
 namespace us3_turbo_access::client {
@@ -29,7 +28,7 @@ RdmaTransferPath::RdmaTransferPath(const ClientOptions& options,
 }
 
 RdmaTransferPath::~RdmaTransferPath() {
-  ucx_pool_.reset();   // 先关闭所有 idle ep
+  ucx_pool_.reset();
   ucx_worker_.reset();
   ucx_ctx_.reset();
 }
@@ -38,17 +37,17 @@ void RdmaTransferPath::SetAvailable(bool available) noexcept {
   available_.store(available, std::memory_order_release);
 }
 
-DataPath RdmaTransferPath::path() const { return DataPath::kNativeRdma; }
+DataFlow RdmaTransferPath::path() const { return DataFlow::CPUDirect; }
 
 bool RdmaTransferPath::available() const {
   return available_.load(std::memory_order_acquire) &&
          ucx_ctx_ != nullptr && ucx_worker_ != nullptr && ucx_pool_ != nullptr;
 }
 
-Result<TransferOutcome> RdmaTransferPath::GetObject(const RequestOptions&,
+Result<TransferOutcome> RdmaTransferPath::GetObject(const GetObjectRequest&,
                                                      MutableBufferView) const {
   return Result<TransferOutcome>::Failure(
-      MakeUnsupportedPath(DataPath::kNativeRdma, "RDMA GET not implemented yet"));
+      MakeUnsupportedPath(DataFlow::CPUDirect, "RDMA GET not implemented yet"));
 }
 
 void RdmaTransferPath::ReturnEp(WritePrepared& prepared, bool success) const noexcept {
@@ -60,18 +59,9 @@ void RdmaTransferPath::ReturnEp(WritePrepared& prepared, bool success) const noe
   }
   prepared.slot = {};
 }
-// ---- PrepareAndWrite（UCX RMA WRITE 路径）----
-//
-// 1. OpenSession RPC
-// 2. PrepareTransfer RPC（只传 transfer_bytes）→ gateway 分配 gw_buf+注册 MR
-//    → 返回 ucx_port / gw_raddr / gw_packed_rkey
-// 3. ucp_ep_create(ucx_port) → ep
-// 4. ucp_ep_rkey_unpack(gw_packed_rkey) → gw_rkey
-// 5. PutAndNotify: ucp_put_nbx(gw_raddr) + ep_flush + AM_WRITE_DONE
-//    → gateway write_done 信号置位
 
 Result<RdmaTransferPath::WritePrepared>
-RdmaTransferPath::PrepareAndWrite(const RequestOptions& request,
+RdmaTransferPath::PrepareAndWrite(const PutObjectRequest& request,
                                    ConstBufferView buffer,
                                    bool is_multipart_part,
                                    std::chrono::steady_clock::time_point deadline) const {
@@ -84,14 +74,15 @@ RdmaTransferPath::PrepareAndWrite(const RequestOptions& request,
         std::string("UCX RMA timeout before ") + stage, true));
   };
 
-  // 1) OpenSession
   if (!check_deadline()) return timeout_err("OpenSession");
   auto open_resp = metadata_client_.RpcOpenTransferSession(
       MakeSessionHandshake(options_, SessionPlan{
           .operation         = OperationType::kPut,
-          .request           = request,
+          .object            = request.object,
+          .timeout           = request.timeout,
+          .idempotency_key   = request.idempotency_key,
           .buffer_type       = buffer.type,
-          .path              = DataPath::kNativeRdma,
+          .path              = DataFlow::CPUDirect,
           .is_multipart_part = is_multipart_part,
       }));
   if (!open_resp.success())
@@ -101,7 +92,6 @@ RdmaTransferPath::PrepareAndWrite(const RequestOptions& request,
   const std::string request_id = open_resp.value().request_id();
   const std::string gateway_id = open_resp.value().gateway_id();
 
-  // 2) PrepareTransfer：gateway 分配+注册 gw_buf，下发 gw_raddr/gw_packed_rkey
   if (!check_deadline()) {
     (void)data_plane_client_.AbortSession(session_id);
     return timeout_err("PrepareTransfer");
@@ -116,10 +106,9 @@ RdmaTransferPath::PrepareAndWrite(const RequestOptions& request,
     (void)data_plane_client_.AbortSession(session_id);
     return Result<WritePrepared>::Failure(MakeTransportFailure(
         "gateway UCX not enabled or gw_raddr is zero",
-        DataPath::kNativeRdma, session_id, false));
+        DataFlow::CPUDirect, session_id, false));
   }
 
-  // 3) 从 pool 获取 ep（命中则复用，miss 则新建握手）
   if (!check_deadline()) {
     (void)data_plane_client_.AbortSession(session_id);
     return timeout_err("pool.Acquire");
@@ -128,7 +117,6 @@ RdmaTransferPath::PrepareAndWrite(const RequestOptions& request,
   const std::string& gw_host = disc.value().host;
   const uint16_t     gw_port = static_cast<uint16_t>(disc.value().ucx_port);
 
-  // 3) 从 pool 获取 slot（ep+rkey）；pool miss 时新建 ep 并 unpack rkey
   auto slot_res = ucx_pool_->Acquire(gw_host, gw_port, disc.value().gw_packed_rkey);
   if (!slot_res.success()) {
     (void)data_plane_client_.AbortSession(session_id);
@@ -136,7 +124,6 @@ RdmaTransferPath::PrepareAndWrite(const RequestOptions& request,
   }
   EpSlot slot = slot_res.value();
 
-  // pool 命中时 rkey 已清空（防止跨 gateway 重启失效），需对本次 packed_rkey 重新 unpack
   if (!slot.rkey && !disc.value().gw_packed_rkey.empty()) {
     auto ust = ucp_ep_rkey_unpack(slot.ep, disc.value().gw_packed_rkey.data(), &slot.rkey);
     if (ust != UCS_OK) {
@@ -144,17 +131,16 @@ RdmaTransferPath::PrepareAndWrite(const RequestOptions& request,
       (void)data_plane_client_.AbortSession(session_id);
       return Result<WritePrepared>::Failure(MakeTransportFailure(
           std::string("ucp_ep_rkey_unpack: ") + ucs_status_string(ust),
-          DataPath::kNativeRdma, session_id, false));
+          DataFlow::CPUDirect, session_id, false));
     }
   }
   if (!slot.rkey) {
     ucx_pool_->Discard(slot);
     (void)data_plane_client_.AbortSession(session_id);
     return Result<WritePrepared>::Failure(MakeTransportFailure(
-        "gw_packed_rkey is empty", DataPath::kNativeRdma, session_id, false));
+        "gw_packed_rkey is empty", DataFlow::CPUDirect, session_id, false));
   }
 
-  // 4) ucp_put_nbx + AM_WRITE_DONE（无 flush，progress loop 驱动）
   if (!check_deadline()) {
     ucx_pool_->Discard(slot);
     (void)data_plane_client_.AbortSession(session_id);
@@ -167,13 +153,12 @@ RdmaTransferPath::PrepareAndWrite(const RequestOptions& request,
       disc.value().gw_raddr, slot.rkey,
       session_id);
 
-  // UcxWorker::ProgressLoop 后台线程已持续驱动 worker，无需调用方轮询
   if (put_fut.wait_until(deadline) != std::future_status::ready) {
     ucx_pool_->Discard(slot);
     (void)data_plane_client_.AbortSession(session_id);
     return Result<WritePrepared>::Failure(MakeError(
         ErrorCode::kTimeout, "PutAndNotify timeout", true,
-        std::string(ToString(DataPath::kNativeRdma))));
+        std::string(ToString(DataFlow::CPUDirect))));
   }
 
   auto put_status = put_fut.get();
@@ -183,10 +168,9 @@ RdmaTransferPath::PrepareAndWrite(const RequestOptions& request,
     (void)data_plane_client_.AbortSession(session_id);
     return Result<WritePrepared>::Failure(MakeTransportFailure(
         std::string("PutAndNotify failed: ") + ucs_status_string(put_status),
-        DataPath::kNativeRdma, session_id, true));
+        DataFlow::CPUDirect, session_id, true));
   }
 
-  // slot（ep+rkey）留给 RAII WritePrepared 归还 pool
   WritePrepared prepared;
   prepared.session_id  = std::move(session_id);
   prepared.request_id  = std::move(request_id);
@@ -198,13 +182,11 @@ RdmaTransferPath::PrepareAndWrite(const RequestOptions& request,
   return Result<WritePrepared>::Success(std::move(prepared));
 }
 
-// ---- PutObject ----
-
 Result<TransferOutcome> RdmaTransferPath::PutObject(
-    const RequestOptions& request, ConstBufferView buffer) const {
+    const PutObjectRequest& request, ConstBufferView buffer) const {
   if (!available())
     return Result<TransferOutcome>::Failure(
-        MakeUnsupportedPath(DataPath::kNativeRdma, "UCX not initialized"));
+        MakeUnsupportedPath(DataFlow::CPUDirect, "UCX not initialized"));
 
   if (buffer.size > options_.rdma.max_msg_bytes)
     return Result<TransferOutcome>::Failure(MakeError(
@@ -238,7 +220,7 @@ Result<TransferOutcome> RdmaTransferPath::PutObject(
     }
 
     TransferOutcome out;
-    out.selected_path     = DataPath::kNativeRdma;
+    out.selected_flow     = DataFlow::CPUDirect;
     out.request_id        = std::move(prepared.value().request_id);
     out.session_id        = std::move(prepared.value().session_id);
     out.gateway_id        = std::move(prepared.value().gateway_id);
@@ -247,19 +229,17 @@ Result<TransferOutcome> RdmaTransferPath::PutObject(
     out.version           = commit.value().version;
     out.bytes_transferred = buffer.size;
     if (request.progress_callback)
-      request.progress_callback({buffer.size, buffer.size, DataPath::kNativeRdma});
+      request.progress_callback({buffer.size, buffer.size, DataFlow::CPUDirect});
     return Result<TransferOutcome>::Success(std::move(out));
   });
 }
 
-// ---- PutObjectPart ----
-
 Result<TransferOutcome> RdmaTransferPath::PutObjectPart(
-    const RequestOptions& request, ConstBufferView buffer,
+    const PutObjectRequest& request, ConstBufferView buffer,
     const std::string& upload_id, std::uint32_t part_number) const {
   if (!available())
     return Result<TransferOutcome>::Failure(
-        MakeUnsupportedPath(DataPath::kNativeRdma, "UCX not initialized"));
+        MakeUnsupportedPath(DataFlow::CPUDirect, "UCX not initialized"));
 
   if (upload_id.empty() || part_number == 0)
     return Result<TransferOutcome>::Failure(
@@ -297,7 +277,7 @@ Result<TransferOutcome> RdmaTransferPath::PutObjectPart(
     }
 
     TransferOutcome out;
-    out.selected_path     = DataPath::kNativeRdma;
+    out.selected_flow     = DataFlow::CPUDirect;
     out.request_id        = std::move(prepared.value().request_id);
     out.session_id        = std::move(prepared.value().session_id);
     out.gateway_id        = std::move(prepared.value().gateway_id);
@@ -306,7 +286,7 @@ Result<TransferOutcome> RdmaTransferPath::PutObjectPart(
     out.version           = "";
     out.bytes_transferred = buffer.size;
     if (request.progress_callback)
-      request.progress_callback({buffer.size, buffer.size, DataPath::kNativeRdma});
+      request.progress_callback({buffer.size, buffer.size, DataFlow::CPUDirect});
     return Result<TransferOutcome>::Success(std::move(out));
   });
 }

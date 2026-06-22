@@ -14,7 +14,7 @@ ToStartUploadParams(const ::us3_turbo_access::gateway::StartUploadRequest& req) 
     params.expected_total_size =
         static_cast<std::size_t>(req.expected_total_size());
   }
-  params.data_path       = req.data_path();
+  params.data_flow       = req.data_flow();
   params.idempotency_key = req.idempotency_key();
   return params;
 }

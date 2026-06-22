@@ -52,7 +52,7 @@ int main(int argc, char** argv) {
   ClientOptions options;
   options.endpoint = endpoint;
   options.client_id = "us3-multipart-example";
-  options.data_path = DataPath::kGdsCuObject;
+  options.data_flow = DataFlow::GPUDirect;
   Client client(std::move(options));
   auto init = client.Initialize();
   if (!init.success()) {
@@ -156,13 +156,13 @@ int main(int argc, char** argv) {
     const std::size_t off = i * part_size;
     const std::size_t sz = part_sizes[i];
     if (!CheckCuda(cudaMemset(dev_dn, 0, sz), "memset dn")) return 1;
-    RequestOptions req;
-    req.object = ObjectId{.bucket = bucket, .key = object_key};
-    req.offset = off;
-    req.length = sz;
-    auto get = client.GetObject(req, MutableBufferView{.data = dev_dn,
-                                                       .size = sz,
-                                                       .type = BufferType::kCudaDevice});
+    GetObjectRequest get_req;
+    get_req.object = ObjectId{.bucket = bucket, .key = object_key};
+    get_req.offset = off;
+    get_req.length = sz;
+    auto get = client.GetObject(get_req, MutableBufferView{.data = dev_dn,
+                                                           .size = sz,
+                                                           .type = BufferType::kCudaDevice});
     if (!get.success()) {
       std::cerr << "Get part " << i << " failed: " << get.error().message
                 << std::endl;

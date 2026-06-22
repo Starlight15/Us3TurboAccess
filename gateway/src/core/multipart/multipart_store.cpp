@@ -23,7 +23,7 @@ std::shared_ptr<MultipartUpload> MultipartStore::Create(const CreateParams& p) {
   upload->upload_id = oss.str();
   upload->bucket = p.bucket;
   upload->object_key = p.object_key;
-  upload->data_path = p.data_path;
+  upload->data_flow = p.data_flow;
   upload->expected_total_size = p.expected_total_size;
   upload->backend_upload_id = p.backend_upload_id;
   upload->state = State::kActive;

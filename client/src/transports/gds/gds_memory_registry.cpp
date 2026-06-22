@@ -47,7 +47,7 @@ class CuObjState {
       static CuObjState st(lib.value()->api());
       if (!st.connected_) {
         return Result<CuObjState*>::Failure(MakeTransportFailure(
-            "cuObjClient 未连接到可用的 RDMA 服务", DataPath::kGdsCuObject, "",
+            "cuObjClient 未连接到可用的 RDMA 服务", DataFlow::GPUDirect, "",
             true));
       }
       return Result<CuObjState*>::Success(&st);
@@ -114,7 +114,7 @@ class CuObjState {
   const auto rc = st.api().get_descriptor(st.client_raw(), ptr, size);
   if (rc != CU_OBJ_SUCCESS) {
     return Result<bool>::Failure(MakeTransportFailure(
-        "cuMemObjGetDescriptor 注册失败", DataPath::kGdsCuObject, "", true));
+        "cuMemObjGetDescriptor 注册失败", DataFlow::GPUDirect, "", true));
   }
   st.registered_.emplace(ptr, size);
   return Result<bool>::Success(true);
@@ -126,7 +126,7 @@ template <typename Pointer>
                                                       BufferType type) {
   if (type != BufferType::kCudaDevice) {
     return Result<RegisteredBuffer>::Failure(MakeUnsupportedPath(
-        DataPath::kGdsCuObject,
+        DataFlow::GPUDirect,
         "The GDS channel only supports CUDA device buffers"));
   }
   if (data == nullptr || size == 0U) {
@@ -217,7 +217,7 @@ Result<bool> GdsMemoryRegistry::UnregisterBuffer(void* ptr) {
   st.registered_.erase(it);
   if (rc != CU_OBJ_SUCCESS) {
     return Result<bool>::Failure(MakeTransportFailure(
-        "cuMemObjPutDescriptor 释放失败", DataPath::kGdsCuObject, "", true));
+        "cuMemObjPutDescriptor 释放失败", DataFlow::GPUDirect, "", true));
   }
   return Result<bool>::Success(true);
 }
@@ -253,7 +253,7 @@ GdsMemoryRegistry::AcquireToken(void* ptr, std::size_t size,
       st.api().get_rdma_token(st.client_raw(), ptr, size, offset, cu_op, &tok);
   if (rc != CU_OBJ_SUCCESS || tok == nullptr) {
     return Result<GdsRdmaToken>::Failure(MakeTransportFailure(
-        "cuMemObjGetRDMAToken 获取失败", DataPath::kGdsCuObject, "", true));
+        "cuMemObjGetRDMAToken 获取失败", DataFlow::GPUDirect, "", true));
   }
   return Result<GdsRdmaToken>::Success(
       GdsRdmaToken(&st.api(), st.client_raw(), tok));

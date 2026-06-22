@@ -63,7 +63,7 @@ Result<ObjectMetadata> Client::HeadObject(const ObjectId& object) const {
   return r;
 }
 
-Result<TransferOutcome> Client::GetObject(const RequestOptions& request,
+Result<TransferOutcome> Client::GetObject(const GetObjectRequest& request,
                                           MutableBufferView buffer) const {
   if (!core_->initialized()) {
     return Result<TransferOutcome>::Failure(MakeNotInitialized("Client"));
@@ -73,12 +73,12 @@ Result<TransferOutcome> Client::GetObject(const RequestOptions& request,
   if (r.success()) {
     metric.MarkSuccess();
     metric.SetBytes(static_cast<std::int64_t>(r.value().bytes_transferred));
-    metric.SetDataPath(r.value().selected_path);  // C.4 per-path 拆分
+    metric.SetDataPath(r.value().selected_flow);
   }
   return r;
 }
 
-Result<TransferOutcome> Client::PutObject(const RequestOptions& request,
+Result<TransferOutcome> Client::PutObject(const PutObjectRequest& request,
                                           ConstBufferView buffer) const {
   if (!core_->initialized()) {
     return Result<TransferOutcome>::Failure(MakeNotInitialized("Client"));
@@ -88,7 +88,7 @@ Result<TransferOutcome> Client::PutObject(const RequestOptions& request,
   auto r = core_->transfer_router().PutObject(request, buffer);
   if (r.success()) {
     metric.MarkSuccess();
-    metric.SetDataPath(r.value().selected_path);  // C.4 per-path 拆分
+    metric.SetDataPath(r.value().selected_flow);
   }
   return r;
 }
@@ -110,7 +110,7 @@ std::future<Result<ObjectMetadata>> Client::HeadObjectAsync(
 }
 
 std::future<Result<TransferOutcome>> Client::GetObjectAsync(
-    const RequestOptions& request, MutableBufferView buffer) const {
+    const GetObjectRequest& request, MutableBufferView buffer) const {
   if (!core_->initialized()) {
     return MakeReadyFuture(Result<TransferOutcome>::Failure(
         MakeNotInitialized("Client")));
@@ -122,7 +122,7 @@ std::future<Result<TransferOutcome>> Client::GetObjectAsync(
 }
 
 std::future<Result<TransferOutcome>> Client::PutObjectAsync(
-    const RequestOptions& request, ConstBufferView buffer) const {
+    const PutObjectRequest& request, ConstBufferView buffer) const {
   if (!core_->initialized()) {
     return MakeReadyFuture(Result<TransferOutcome>::Failure(
         MakeNotInitialized("Client")));
@@ -149,14 +149,14 @@ Status Client::StartUpload(const ObjectId& object, MultipartUpload* out,
   }
   ObjectDescriptor desc;
   desc.object               = object;
-  desc.data_path            = core_->options().data_path;
+  desc.data_flow            = core_->options().data_flow;
   desc.expected_total_size  = expected_total_size;
   desc.idempotency_key      = idempotency_key;
 
   auto impl = std::make_unique<MultipartUpload::Impl>();
-  impl->data_path = desc.data_path;
+  impl->data_flow = desc.data_flow;
 
-  auto& flow = core_->upload_coordinator().SelectFlow(desc.data_path);
+  auto& flow = core_->upload_coordinator().SelectFlow(desc.data_flow);
   if (auto st = flow.CreateSession(desc, &impl->session); !st.ok()) return st;
 
   *out = MultipartUpload(std::move(impl));
@@ -171,7 +171,7 @@ Result<bool> Client::RegisterDeviceBuffer(void* ptr, std::size_t size) {
   if (!core_->initialized()) {
     return Result<bool>::Failure(MakeNotInitialized("Client"));
   }
-  if (core_->options().data_path != DataPath::kGdsCuObject) {
+  if (core_->options().data_flow != DataFlow::GPUDirect) {
     // 非 GDS 通路无需 cuObj descriptor 注册；保持 idempotent 友好。
     return Result<bool>::Success(true);
   }
@@ -182,7 +182,7 @@ Result<bool> Client::UnregisterDeviceBuffer(void* ptr) {
   if (!core_->initialized()) {
     return Result<bool>::Failure(MakeNotInitialized("Client"));
   }
-  if (core_->options().data_path != DataPath::kGdsCuObject) {
+  if (core_->options().data_flow != DataFlow::GPUDirect) {
     return Result<bool>::Success(true);
   }
   return core_->gds_memory_registry().UnregisterBuffer(ptr);

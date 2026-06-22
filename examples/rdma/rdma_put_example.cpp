@@ -32,16 +32,15 @@ int main(int argc, char** argv) {
   ClientOptions options;
   options.endpoint = endpoint;
   options.client_id = "us3-rdma-example";
-  options.data_path = DataPath::kNativeRdma;
+  options.data_flow = DataFlow::CPUDirect;
   Client client(std::move(options));
   if (auto init = client.Initialize(); !init.success()) {
     std::cerr << "Initialize failed: " << init.error().message << std::endl;
     return 1;
   }
 
-  RequestOptions request;
+  PutObjectRequest request;
   request.object = ObjectId{.bucket = bucket, .key = object_key};
-  request.length = bytes;
 
   auto put = client.PutObject(request,
       ConstBufferView{.data = raw, .size = bytes, .type = BufferType::kHostRegular});
@@ -49,7 +48,7 @@ int main(int argc, char** argv) {
     std::cerr << "PutObject failed: " << put.error().message << std::endl;
     return 1;
   }
-  std::cout << "PUT path=" << ToString(put.value().selected_path)
+  std::cout << "PUT path=" << ToString(put.value().selected_flow)
             << " bytes=" << put.value().bytes_transferred
             << " etag=" << put.value().etag << std::endl;
 

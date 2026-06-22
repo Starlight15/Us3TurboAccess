@@ -15,7 +15,7 @@
 
 #include "data_path/ucx/ucx_buffer_pool.h"
 
-namespace us3_turbo_access::gateway::data_path::ucx {
+namespace us3_turbo_access::gateway::data_flow::ucx {
 
 /**
  * 一次 UCX RMA WRITE session 的服务端状态。
@@ -63,4 +63,4 @@ class UcxSessionRegistry {
   std::unordered_map<std::string, std::shared_ptr<UcxSessionEntry>>   entries_;
 };
 
-}  // namespace us3_turbo_access::gateway::data_path::ucx
+}  // namespace us3_turbo_access::gateway::data_flow::ucx

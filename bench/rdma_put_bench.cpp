@@ -83,7 +83,7 @@ int main(int argc, char** argv) {
   ClientOptions options;
   options.endpoint  = a.endpoint;
   options.client_id = "us3-rdma-put-bench";
-  options.data_path = DataPath::kNativeRdma;
+  options.data_flow = DataFlow::CPUDirect;
   options.async_worker_threads = a.threads;
   options.rdma.send_crc32c     = false;  // 专注 throughput
   Client client(std::move(options));
@@ -107,10 +107,9 @@ int main(int argc, char** argv) {
   // key 模数：0=每次唯一 key；>0=idx % N 限制后端容量。
   const std::size_t key_mod = a.key_modulo > 0 ? a.key_modulo : a.count;
   auto submit = [&](std::size_t idx) -> std::future<Result<TransferOutcome>> {
-    RequestOptions req;
+    PutObjectRequest req;
     req.object = ObjectId{.bucket = a.bucket,
                           .key = a.key_prefix + std::to_string(idx % key_mod)};
-    req.length = a.object_size;
     return client.PutObjectAsync(req, buf_view);
   };
 

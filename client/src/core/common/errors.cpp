@@ -14,14 +14,14 @@ Error MakeInvalidArgument(std::string_view message) {
   return MakeError(ErrorCode::kInvalidArgument, std::string(message));
 }
 
-Error MakeUnsupportedPath(DataPath path, std::string_view message) {
+Error MakeUnsupportedPath(DataFlow path, std::string_view message) {
   return MakeError(ErrorCode::kUnsupported, std::string(message), false,
                    std::string(ToString(path)));
 }
 
 Error MakeRpcFailure(const brpc::Controller& controller,
                      std::string_view message,
-                     DataPath path,
+                     DataFlow path,
                      std::string_view request_id) {
   // brpc 超时 (ERPCTIMEDOUT / ETIMEDOUT) → 统一映射为 kTimeout 让上层
   // RetryIfRetryable 能正确处理（kTimeout 默认 retryable=true）。
@@ -33,7 +33,7 @@ Error MakeRpcFailure(const brpc::Controller& controller,
 }
 
 Error MakeTransportFailure(std::string_view message,
-                           DataPath path,
+                           DataFlow path,
                            std::string_view request_id,
                            bool retryable) {
   return MakeError(ErrorCode::kTransportError, std::string(message), retryable,

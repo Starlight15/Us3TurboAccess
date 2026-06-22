@@ -17,7 +17,7 @@ struct ObjectRequest {
   ObjectId object;
   std::uint64_t offset{0};
   std::optional<std::uint64_t> length;
-  DataPath data_path{DataPath::kGdsCuObject};
+  DataFlow data_flow{DataFlow::GPUDirect};
   BufferType buffer_type{BufferType::kHostRegular};
   std::string checksum_policy{"none"};
   std::unordered_map<std::string, std::string> extra_headers;
@@ -30,7 +30,7 @@ struct SessionOpening {
   RpcCallMetadata context;
   OperationType operation{OperationType::kGet};
   ObjectId object;
-  DataPath data_path{DataPath::kGdsCuObject};
+  DataFlow data_flow{DataFlow::GPUDirect};
   BufferType buffer_type{BufferType::kHostRegular};
   std::uint64_t offset{0};
   std::optional<std::uint64_t> length;

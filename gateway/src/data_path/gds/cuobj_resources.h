@@ -5,7 +5,7 @@
 
 #include <cuobjserver.h>
 
-namespace us3_turbo_access::gateway::data_path::gds {
+namespace us3_turbo_access::gateway::data_flow::gds {
 
 /**
  * @brief RAII：自动 deRegisterBuffer。
@@ -78,4 +78,4 @@ class HostBuffer {
   std::size_t size_{0};
 };
 
-}  // namespace us3_turbo_access::gateway::data_path::gds
+}  // namespace us3_turbo_access::gateway::data_flow::gds

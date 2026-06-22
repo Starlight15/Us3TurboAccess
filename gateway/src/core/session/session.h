@@ -34,7 +34,7 @@ struct OpenSessionParams {
   std::string   bucket;
   std::string   object_key;
   OperationType op{OperationType::kGet};
-  DataPath      data_path{DataPath::kHttpTcp};
+  DataFlow      data_flow{DataFlow::GPUDirect};
   std::string   buffer_type{"host-regular"};
   std::uint64_t offset{0};
   std::uint64_t expected_size{0};
@@ -59,7 +59,7 @@ struct Session {
   std::string                          bucket;
   std::string                          object_key;
   OperationType                        op{OperationType::kGet};
-  DataPath                             data_path{DataPath::kHttpTcp};
+  DataFlow                             data_flow{DataFlow::GPUDirect};
   std::string                          buffer_type;
   std::uint64_t                        offset{0};
   std::uint64_t                        expected_size{0};

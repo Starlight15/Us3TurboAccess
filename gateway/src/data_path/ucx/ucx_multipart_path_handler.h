@@ -15,7 +15,7 @@ class MultipartCoordinator;
 struct MultipartUpload;
 }  // namespace us3_turbo_access::gateway::core::multipart
 
-namespace us3_turbo_access::gateway::data_path::ucx {
+namespace us3_turbo_access::gateway::data_flow::ucx {
 
 class UcxExecutor;
 
@@ -116,4 +116,4 @@ class UcxMultipartPathHandler final {
 void FinishCommitPart(std::shared_ptr<CommitPartContext> ctx,
                       Result<std::string> write_result);
 
-}  // namespace us3_turbo_access::gateway::data_path::ucx
+}  // namespace us3_turbo_access::gateway::data_flow::ucx
