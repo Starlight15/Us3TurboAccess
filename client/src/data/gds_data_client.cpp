@@ -49,8 +49,8 @@ Result<us3_turbo_access::gateway::GdsChunkResponse> GdsDataClient::GdsChunk(
   rpc_request.set_request_id(request.request_id);
   rpc_request.set_session_id(request.session_id);
   rpc_request.set_transfer_ticket(request.transfer_ticket);
-  rpc_request.set_bucket(request.object.object.bucket);
-  rpc_request.set_object_key(request.object.object.key);
+  rpc_request.set_bucket(request.object.bucket);
+  rpc_request.set_object_key(request.object.key);
   rpc_request.set_data_flow(std::string(ToString(request.object.data_flow)));
   rpc_request.set_buffer_type(std::string(ToString(request.object.buffer_type)));
   rpc_request.set_checksum_policy(request.object.checksum_policy);

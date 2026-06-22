@@ -37,7 +37,8 @@ template <typename BufferView>
   }
   auto open_request = MakeSessionHandshake(context.options, SessionPlan{
       .operation = OperationType::kGet,
-      .object = request.object,
+      .bucket = request.bucket,
+      .key = request.key,
       .offset = request.offset,
       .length = request.length,
       .timeout = request.timeout,
@@ -60,7 +61,8 @@ template <typename BufferView>
   }
   auto open_request = MakeSessionHandshake(context.options, SessionPlan{
       .operation = OperationType::kPut,
-      .object = request.object,
+      .bucket = request.bucket,
+      .key = request.key,
       .timeout = request.timeout,
       .idempotency_key = request.idempotency_key,
       .buffer_type = buffer.type,

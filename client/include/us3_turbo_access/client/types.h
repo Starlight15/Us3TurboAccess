@@ -53,22 +53,11 @@ enum class OperationType {
 };
 
 /**
- * @brief Object identifier within a bucket namespace.
- */
-struct ObjectId {
-  std::string bucket;
-  std::string key;
-};
-
-/**
  * @brief Object identity + request context packed together for upload/multipart chains.
- *
- * Use this to pass the common trio (object, data_flow, request attributes) as a
- * single argument instead of repeating individual fields across layers.
- * ObjectId is kept separate and continues to represent pure object identity.
  */
 struct ObjectDescriptor {
-  ObjectId    object;
+  std::string bucket;
+  std::string key;
   DataFlow    data_flow{DataFlow::NONE};
   std::string checksum_policy{"none"};
 
@@ -97,34 +86,56 @@ using ProgressCallback = std::function<void(const TransferProgress&)>;
  * @brief Request parameters for PutObject operations.
  */
 struct PutObjectRequest {
-  ObjectId object;
+  std::string bucket;
+  std::string key;
   std::chrono::milliseconds timeout{std::chrono::milliseconds(30000)};
   std::unordered_map<std::string, std::string> extra_headers;
-  std::string checksum_policy{"none"};   /**< Checksum policy name sent to the service. */
-  std::string idempotency_key;            /**< Caller-supplied idempotency token. */
+  std::string checksum_policy{"none"};
+  std::string idempotency_key;
   ProgressCallback progress_callback;
+
+  PutObjectRequest& set_bucket(std::string v)                    { bucket = std::move(v); return *this; }
+  PutObjectRequest& set_key(std::string v)                       { key = std::move(v); return *this; }
+  PutObjectRequest& set_timeout(std::chrono::milliseconds v)     { timeout = v; return *this; }
+  PutObjectRequest& set_checksum_policy(std::string v)           { checksum_policy = std::move(v); return *this; }
+  PutObjectRequest& set_idempotency_key(std::string v)           { idempotency_key = std::move(v); return *this; }
+  PutObjectRequest& set_progress_callback(ProgressCallback v)    { progress_callback = std::move(v); return *this; }
 };
 
 /**
  * @brief Request parameters for GetObject operations.
  */
 struct GetObjectRequest {
-  ObjectId object;
-  std::uint64_t offset{0};                 /**< Starting byte offset within the object. */
-  std::optional<std::uint64_t> length;    /**< Requested byte count; empty means to the end. */
+  std::string bucket;
+  std::string key;
+  std::uint64_t offset{0};
+  std::optional<std::uint64_t> length;
   std::chrono::milliseconds timeout{std::chrono::milliseconds(30000)};
   std::unordered_map<std::string, std::string> extra_headers;
   std::string checksum_policy{"none"};
   ProgressCallback progress_callback;
+
+  GetObjectRequest& set_bucket(std::string v)                    { bucket = std::move(v); return *this; }
+  GetObjectRequest& set_key(std::string v)                       { key = std::move(v); return *this; }
+  GetObjectRequest& set_offset(std::uint64_t v)                  { offset = v; return *this; }
+  GetObjectRequest& set_length(std::uint64_t v)                  { length = v; return *this; }
+  GetObjectRequest& set_timeout(std::chrono::milliseconds v)     { timeout = v; return *this; }
+  GetObjectRequest& set_checksum_policy(std::string v)           { checksum_policy = std::move(v); return *this; }
+  GetObjectRequest& set_progress_callback(ProgressCallback v)    { progress_callback = std::move(v); return *this; }
 };
 
 /**
  * @brief Request parameters for HeadObject operations.
  */
 struct HeadObjectRequest {
-  ObjectId object;
+  std::string bucket;
+  std::string key;
   std::chrono::milliseconds timeout{std::chrono::milliseconds(30000)};
   std::unordered_map<std::string, std::string> extra_headers;
+
+  HeadObjectRequest& set_bucket(std::string v)                   { bucket = std::move(v); return *this; }
+  HeadObjectRequest& set_key(std::string v)                      { key = std::move(v); return *this; }
+  HeadObjectRequest& set_timeout(std::chrono::milliseconds v)    { timeout = v; return *this; }
 };
 
 /**

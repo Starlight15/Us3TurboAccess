@@ -14,7 +14,8 @@ namespace us3_turbo_access::client {
  * @brief Object addressing + transfer options shared between RPC payloads.
  */
 struct ObjectRequest {
-  ObjectId object;
+  std::string bucket;
+  std::string key;
   std::uint64_t offset{0};
   std::optional<std::uint64_t> length;
   DataFlow data_flow{DataFlow::GPUDirect};
@@ -29,7 +30,8 @@ struct ObjectRequest {
 struct SessionOpening {
   RpcCallMetadata context;
   OperationType operation{OperationType::kGet};
-  ObjectId object;
+  std::string bucket;
+  std::string key;
   DataFlow data_flow{DataFlow::GPUDirect};
   BufferType buffer_type{BufferType::kHostRegular};
   std::uint64_t offset{0};

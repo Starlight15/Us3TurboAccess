@@ -147,8 +147,8 @@ int main(int argc, char** argv) {
   const std::size_t key_mod = a.key_modulo > 0 ? a.key_modulo : a.count;
   auto do_put = [&](std::size_t idx) -> Result<TransferOutcome> {
     PutObjectRequest req;
-    req.object = ObjectId{.bucket = a.bucket,
-                          .key = a.key_prefix + std::to_string(idx % key_mod)};
+    req.bucket = a.bucket;
+    req.key = a.key_prefix + std::to_string(idx % key_mod);
     void* dev = dev_pool[idx % pool_size];
     ConstBufferView v{.data = dev, .size = a.object_size,
                        .type = BufferType::kCudaDevice};

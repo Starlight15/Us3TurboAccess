@@ -58,7 +58,8 @@ class ChunkDispatcher {
   const GdsDataClient& data_client_;
   const ClientOptions& options_;
   OperationType op_;
-  ObjectId object_;
+  std::string bucket_;
+  std::string key_;
   std::uint64_t offset_{0};
   std::optional<std::uint64_t> length_;
   std::chrono::milliseconds timeout_{std::chrono::milliseconds(30000)};

@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
   }
 
   MultipartUpload upload;
-  if (auto st = client.StartUpload(ObjectId{.bucket = bucket, .key = object_key},
+  if (auto st = client.StartUpload(bucket, object_key,
                                    &upload, total_bytes);
       !st.ok()) {
     std::cerr << "StartUpload failed: " << st.error().message << std::endl;
@@ -141,7 +141,7 @@ int main(int argc, char** argv) {
   std::cout << "second Complete correctly rejected: "
             << complete2.error().message << std::endl;
 
-  auto head = client.HeadObject(ObjectId{.bucket = bucket, .key = object_key});
+  auto head = client.HeadObject(bucket, object_key);
   if (!head.success() || head.value().content_length != total_bytes) {
     std::cerr << "Head mismatch: " << head.value().content_length
               << " vs " << total_bytes << std::endl;
@@ -157,7 +157,8 @@ int main(int argc, char** argv) {
     const std::size_t sz = part_sizes[i];
     if (!CheckCuda(cudaMemset(dev_dn, 0, sz), "memset dn")) return 1;
     GetObjectRequest get_req;
-    get_req.object = ObjectId{.bucket = bucket, .key = object_key};
+    get_req.bucket = bucket;
+    get_req.key = object_key;
     get_req.offset = off;
     get_req.length = sz;
     auto get = client.GetObject(get_req, MutableBufferView{.data = dev_dn,

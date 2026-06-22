@@ -13,7 +13,8 @@ namespace us3_turbo_access::client {
 // 装配 SessionOpening 所需的输入参数集合。
 struct SessionPlan {
   OperationType operation;
-  ObjectId object;
+  std::string bucket;
+  std::string key;
   std::uint64_t offset{0};
   std::optional<std::uint64_t> length;
   std::chrono::milliseconds timeout{std::chrono::milliseconds(30000)};
@@ -26,7 +27,8 @@ struct SessionPlan {
 // 装配 ChunkOp 所需的输入参数集合。
 struct ChunkOpPlan {
   OperationType operation;
-  ObjectId object;
+  std::string bucket;
+  std::string key;
   std::uint64_t offset{0};
   std::optional<std::uint64_t> length;
   std::string checksum_policy{"none"};

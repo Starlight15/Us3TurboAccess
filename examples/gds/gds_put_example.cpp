@@ -8,152 +8,71 @@
 
 #include "us3_turbo_access/client/client.h"
 
-namespace {
-// 拆分模式下（OpenSession→proxy、GdsPut→backend）的数据面目标。
-// 未设置时回退到 endpoint，保持原单 endpoint 行为。
-[[nodiscard]] std::string EnvOr(const char* name, std::string fallback) {
-  const char* v = std::getenv(name);
-  return (v != nullptr && *v != '\0') ? std::string(v) : fallback;
-}
-[[nodiscard]] bool EnvSet(const char* name) {
-  const char* v = std::getenv(name);
-  return v != nullptr && *v != '\0';
-}
-}  // namespace
-
-namespace us3_turbo_access::client {
-namespace {
-
-[[nodiscard]] bool CheckCuda(cudaError_t status, const char* action) {
-  if (status == cudaSuccess) {
-    return true;
-  }
-  std::cerr << action << " failed: " << cudaGetErrorString(status) << std::endl;
-  return false;
-}
-
-}  // namespace
-}  // namespace us3_turbo_access::client
-
 int main(int argc, char** argv) {
   using namespace us3_turbo_access::client;
 
-  if (argc != 5) {
-    std::cerr << "Usage: " << argv[0]
-              << " <endpoint> <bytes> <bucket> <object_key>" << std::endl;
+  const std::string proxy_addr = "192.168.1.198";
+  const std::size_t bytes = 100UL * 1024UL * 1024UL;
+  const std::string bucket = "test-bucket";
+  const std::string key = "obj1";
+
+  // ---- 分配并初始化 GPU 内存 ----
+  void* dev = nullptr;
+  if (cudaError_t e = cudaMalloc(&dev, bytes); e != cudaSuccess) {
+    std::cerr << "cudaMalloc: " << cudaGetErrorString(e) << "\n";
+    return 1;
+  }
+  std::vector<std::byte> host(bytes);
+  for (std::size_t i = 0; i < bytes; ++i) {
+    host[i] = static_cast<std::byte>(i % 251U);
+  }
+
+  if (cudaError_t e = cudaMemcpy(dev, host.data(), bytes, cudaMemcpyHostToDevice);
+      e != cudaSuccess) {
+    std::cerr << "cudaMemcpy: " << cudaGetErrorString(e) << "\n";
+    cudaFree(dev);
     return 1;
   }
 
-  const std::string endpoint = argv[1];
-  const std::size_t bytes = static_cast<std::size_t>(std::strtoull(argv[2], nullptr, 10));
-  const std::string bucket = argv[3];
-  const std::string object_key = argv[4];
+  // ---- 初始化 Client ----
+  ClientOptions opts;
+  opts.endpoint = proxy_addr;
+  opts.client_id = "us3-gds-example";
+  opts.data_flow = DataFlow::GPUDirect;
 
-  std::vector<std::byte> host_upload(bytes);
-  std::vector<std::byte> host_download(bytes);
-  for (std::size_t index = 0; index < host_upload.size(); ++index) {
-    host_upload[index] = static_cast<std::byte>(index % 251U);
-  }
-
-  void* device_upload = nullptr;
-  void* device_download = nullptr;
-  if (!CheckCuda(cudaMalloc(&device_upload, bytes), "cudaMalloc upload") ||
-      !CheckCuda(cudaMalloc(&device_download, bytes), "cudaMalloc download") ||
-      !CheckCuda(cudaMemcpy(device_upload, host_upload.data(), bytes, cudaMemcpyHostToDevice),
-                 "cudaMemcpy host->device") ||
-      !CheckCuda(cudaMemset(device_download, 0, bytes), "cudaMemset download")) {
-    if (device_upload != nullptr) {
-      cudaFree(device_upload);
-    }
-    if (device_download != nullptr) {
-      cudaFree(device_download);
-    }
+  Client client(std::move(opts));
+  if (auto r = client.Initialize(); !r.success()) {
+    std::cerr << "Initialize: " << r.error().message << "\n";
+    cudaFree(dev);
     return 1;
   }
 
-  ClientOptions options;
-  options.endpoint = endpoint;
-  // 拆分模式：GDS_OPENSESSION_ENDPOINT（→proxy）与 GDS_GDSPUT_ENDPOINT（→backend）。
-  // 优先于 argv[1]（保留单 endpoint 默认）。
-  if (EnvSet("GDS_OPENSESSION_ENDPOINT")) {
-    options.endpoint = EnvOr("GDS_OPENSESSION_ENDPOINT", endpoint);
-  }
-  if (EnvSet("GDS_GDSPUT_ENDPOINT")) {
-    options.gds_data_endpoint = EnvOr("GDS_GDSPUT_ENDPOINT", "");
-  }
-  options.client_id = "us3-gds-example";
-  options.data_flow = DataFlow::GPUDirect;
-
-  Client client(std::move(options));
-  auto init_result = client.Initialize();
-  if (!init_result.success()) {
-    std::cerr << "Initialize client failed: " << init_result.error().message << std::endl;
-    cudaFree(device_upload);
-    cudaFree(device_download);
+  // ---- 注册显存 ----
+  if (auto r = client.RegisterDeviceBuffer(dev, bytes); !r.success()) {
+    std::cerr << "RegisterDeviceBuffer: " << r.error().message << "\n";
+    cudaFree(dev);
     return 1;
   }
 
-  // cudaMalloc 后立即注册到 cuObj descriptor 表（cudaFree 之前必须反注册）。
-  if (auto r = client.RegisterDeviceBuffer(device_upload, bytes); !r.success()) {
-    std::cerr << "RegisterDeviceBuffer(upload) failed: " << r.error().message << std::endl;
-    cudaFree(device_upload); cudaFree(device_download); return 1;
-  }
-  if (auto r = client.RegisterDeviceBuffer(device_download, bytes); !r.success()) {
-    std::cerr << "RegisterDeviceBuffer(download) failed: " << r.error().message << std::endl;
-    client.UnregisterDeviceBuffer(device_upload);
-    cudaFree(device_upload); cudaFree(device_download); return 1;
-  }
+  // ---- PUT ----
+  PutObjectRequest req;
+  req.set_bucket(bucket)
+     .set_key(key);
 
-  PutObjectRequest request;
-  request.object = ObjectId{.bucket = bucket, .key = object_key};
+  auto put = client.PutObject(
+      req, ConstBufferView{.data = dev, .size = bytes, .type = BufferType::kCudaDevice});
 
-  auto put_result = client.PutObject(
-      request, ConstBufferView{.data = device_upload, .size = bytes, .type = BufferType::kCudaDevice});
-  if (!put_result.success()) {
-    std::cerr << "PutObject failed: " << put_result.error().message << std::endl;
-    cudaFree(device_upload);
-    cudaFree(device_download);
-    return 1;
-  }
-  std::cout << "PUT path=" << ToString(put_result.value().selected_flow)
-            << " bytes=" << put_result.value().bytes_transferred << std::endl;
+  // ---- 反注册显存后释放 GPU 内存 ----
+  (void)client.UnregisterDeviceBuffer(dev);
+  cudaFree(dev);
 
-  auto head_result = client.HeadObject(request.object);
-  if (!head_result.success()) {
-    std::cerr << "HeadObject failed: " << head_result.error().message << std::endl;
-    cudaFree(device_upload);
-    cudaFree(device_download);
-    return 1;
-  }
-  std::cout << "HEAD size=" << head_result.value().content_length << std::endl;
-
-  GetObjectRequest get_req;
-  get_req.object = request.object;
-  auto get_result = client.GetObject(
-      get_req, MutableBufferView{.data = device_download, .size = bytes, .type = BufferType::kCudaDevice});
-  if (!get_result.success()) {
-    std::cerr << "GetObject failed: " << get_result.error().message << std::endl;
-    cudaFree(device_upload);
-    cudaFree(device_download);
-    return 1;
-  }
-  std::cout << "GET path=" << ToString(get_result.value().selected_flow)
-            << " bytes=" << get_result.value().bytes_transferred << std::endl;
-
-  if (!CheckCuda(cudaMemcpy(host_download.data(), device_download, bytes, cudaMemcpyDeviceToHost),
-                 "cudaMemcpy device->host")) {
-    cudaFree(device_upload);
-    cudaFree(device_download);
+  if (!put.success()) {
+    std::cerr << "PutObject FAILED: " << put.error().message << "\n";
     return 1;
   }
 
-  const bool same = std::memcmp(host_upload.data(), host_download.data(), bytes) == 0;
-  std::cout << "same=" << (same ? "true" : "false") << std::endl;
-
-  // cudaFree 前先反注册
-  (void)client.UnregisterDeviceBuffer(device_upload);
-  (void)client.UnregisterDeviceBuffer(device_download);
-  cudaFree(device_upload);
-  cudaFree(device_download);
-  return same ? 0 : 1;
+  std::cout << "OK path=" << ToString(put.value().selected_flow)
+            << " bytes=" << put.value().bytes_transferred
+            << " etag=" << put.value().etag << "\n";
+  return 0;
 }

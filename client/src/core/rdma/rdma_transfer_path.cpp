@@ -78,7 +78,8 @@ RdmaTransferPath::PrepareAndWrite(const PutObjectRequest& request,
   auto open_resp = metadata_client_.RpcOpenTransferSession(
       MakeSessionHandshake(options_, SessionPlan{
           .operation         = OperationType::kPut,
-          .object            = request.object,
+          .bucket            = request.bucket,
+          .key               = request.key,
           .timeout           = request.timeout,
           .idempotency_key   = request.idempotency_key,
           .buffer_type       = buffer.type,

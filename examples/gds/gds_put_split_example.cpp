@@ -91,7 +91,8 @@ int main(int argc, char** argv) {
 
   // ---- PUT（链路：OpenSession→proxy + GdsPut→backend + backend→proxy通知）----
   PutObjectRequest req;
-  req.object  = ObjectId{.bucket = bucket, .key = key};
+  req.bucket = bucket;
+  req.key    = key;
     // proxy 校验 expected_size > 0
 
   auto put = client.PutObject(

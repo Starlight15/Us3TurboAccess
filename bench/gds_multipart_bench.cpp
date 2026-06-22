@@ -137,7 +137,7 @@ int main(int argc, char** argv) {
 
   auto UploadOne = [&](const std::string& key) -> bool {
     MultipartUpload upload;
-    if (auto st = client.StartUpload(ObjectId{a.bucket, key}, &upload, a.object_size);
+    if (auto st = client.StartUpload(a.bucket, key, &upload, a.object_size);
         !st.ok()) {
       std::cerr << "StartUpload failed: " << st.error().message << std::endl;
       return false;

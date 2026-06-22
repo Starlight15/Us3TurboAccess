@@ -58,7 +58,8 @@ SessionOpening MakeSessionHandshake(const ClientOptions& options,
   return SessionOpening{
       .context = MakeRpcContext(options, input.timeout, input.operation),
       .operation = input.operation,
-      .object = input.object,
+      .bucket = input.bucket,
+      .key = input.key,
       .data_flow = input.path,
       .buffer_type = input.buffer_type,
       .offset = input.offset,
@@ -72,13 +73,14 @@ SessionOpening MakeSessionHandshake(const ClientOptions& options,
 
 ChunkOp MakeChunkOp(const ClientOptions& options, ChunkOpPlan input) {
   ObjectRequest object{
-      .object = input.object,
+      .bucket = std::move(input.bucket),
+      .key = std::move(input.key),
       .offset = input.offset,
       .length = input.length,
       .data_flow = input.path,
       .buffer_type = input.buffer_type,
-      .checksum_policy = input.checksum_policy,
-      .extra_headers = input.extra_headers,
+      .checksum_policy = std::move(input.checksum_policy),
+      .extra_headers = std::move(input.extra_headers),
   };
   return ChunkOp{
       .context = MakeRpcContext(options, input.timeout, input.operation),

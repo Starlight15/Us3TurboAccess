@@ -36,7 +36,8 @@ class MetadataClient {
 
   [[nodiscard]] Result<us3_turbo_access::gateway::OpenSessionResponse> RpcOpenTransferSession(
       const SessionOpening& request) const;
-  [[nodiscard]] Result<ObjectMetadata> HeadObject(const ObjectId& object) const;
+  [[nodiscard]] Result<ObjectMetadata> HeadObject(const std::string& bucket,
+                                                  const std::string& key) const;
 
   [[nodiscard]] Result<StartUploadResult>
     RpcCreateMultipartUpload(const ObjectDescriptor& desc) const;

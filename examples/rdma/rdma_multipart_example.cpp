@@ -49,7 +49,7 @@ int main(int argc, char** argv) {
   }
 
   MultipartUpload upload;
-  if (auto st = client.StartUpload(ObjectId{.bucket = bucket, .key = object_key},
+  if (auto st = client.StartUpload(bucket, object_key,
                                    &upload, total_bytes);
       !st.ok()) {
     std::cerr << "StartUpload failed: " << st.error().message << std::endl;
@@ -107,7 +107,7 @@ int main(int argc, char** argv) {
   std::cout << "Complete etag=" << complete.value().etag
             << " size=" << complete.value().content_length << std::endl;
 
-  auto head = client.HeadObject(ObjectId{.bucket = bucket, .key = object_key});
+  auto head = client.HeadObject(bucket, object_key);
   if (!head.success() || head.value().content_length != total_bytes) {
     std::cerr << "HEAD mismatch: got "
               << (head.success() ? head.value().content_length : 0)

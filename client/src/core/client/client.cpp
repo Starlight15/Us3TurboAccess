@@ -53,12 +53,13 @@ const PlatformCapabilities& Client::capabilities() const { return core_->capabil
 //  同步操作
 // ============================================================
 
-Result<ObjectMetadata> Client::HeadObject(const ObjectId& object) const {
+Result<ObjectMetadata> Client::HeadObject(const std::string& bucket,
+                                          const std::string& key) const {
   if (!core_->initialized()) {
     return Result<ObjectMetadata>::Failure(MakeNotInitialized("Client"));
   }
   ScopedTransferMetric metric(ScopedTransferMetric::Op::kHead);
-  auto r = core_->metadata_client().HeadObject(object);
+  auto r = core_->metadata_client().HeadObject(bucket, key);
   if (r.success()) metric.MarkSuccess();
   return r;
 }
@@ -98,14 +99,14 @@ Result<TransferOutcome> Client::PutObject(const PutObjectRequest& request,
 // ============================================================
 
 std::future<Result<ObjectMetadata>> Client::HeadObjectAsync(
-    const ObjectId& object) const {
+    const std::string& bucket, const std::string& key) const {
   if (!core_->initialized()) {
     return MakeReadyFuture(Result<ObjectMetadata>::Failure(
         MakeNotInitialized("Client")));
   }
   return core_->async_executor().Submit(
-      [core = core_.get(), object]() -> Result<ObjectMetadata> {
-        return core->metadata_client().HeadObject(object);
+      [core = core_.get(), bucket, key]() -> Result<ObjectMetadata> {
+        return core->metadata_client().HeadObject(bucket, key);
       });
 }
 
@@ -138,7 +139,8 @@ std::future<Result<TransferOutcome>> Client::PutObjectAsync(
 // ============================================================
 
 // 职责：SDK 对外入口；创建 MultipartUpload handle，填充 impl，路由到 coordinator。
-Status Client::StartUpload(const ObjectId& object, MultipartUpload* out,
+Status Client::StartUpload(const std::string& bucket, const std::string& key,
+                           MultipartUpload* out,
                            std::size_t expected_total_size,
                            const std::string& idempotency_key) {
   if (out == nullptr) {
@@ -148,7 +150,8 @@ Status Client::StartUpload(const ObjectId& object, MultipartUpload* out,
     return Status::FromError(MakeNotInitialized("Client"));
   }
   ObjectDescriptor desc;
-  desc.object               = object;
+  desc.bucket               = bucket;
+  desc.key                  = key;
   desc.data_flow            = core_->options().data_flow;
   desc.expected_total_size  = expected_total_size;
   desc.idempotency_key      = idempotency_key;

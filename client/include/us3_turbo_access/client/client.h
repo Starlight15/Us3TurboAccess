@@ -182,7 +182,8 @@ class Client {
    *
    * @return Object metadata including content length, etag, and version.
    */
-  [[nodiscard]] Result<ObjectMetadata> HeadObject(const ObjectId& object) const;
+  [[nodiscard]] Result<ObjectMetadata> HeadObject(const std::string& bucket,
+                                                  const std::string& key) const;
 
   /**
    * @brief Downloads the object (or a range of it) into the caller's buffer.
@@ -210,7 +211,7 @@ class Client {
    * caller must keep the returned future alive until it is ready.
    */
   [[nodiscard]] std::future<Result<ObjectMetadata>>
-    HeadObjectAsync(const ObjectId& object) const;
+    HeadObjectAsync(const std::string& bucket, const std::string& key) const;
 
   /**
    * @brief Asynchronous variant of GetObject.
@@ -236,13 +237,15 @@ class Client {
    * On success, writes the upload handle into @p out.
    * On failure, @p out is untouched and the returned Status describes the error.
    *
-   * @param object              Destination object.
+   * @param bucket              Destination bucket.
+   * @param key                 Destination object key.
    * @param out                 Non-null pointer to a MultipartUpload to fill.
    * @param expected_total_size Optional hint for the gateway; pass 0 if unknown.
    * @param idempotency_key     Caller-supplied token.
    */
   [[nodiscard]] Status
-    StartUpload(const ObjectId& object, MultipartUpload* out,
+    StartUpload(const std::string& bucket, const std::string& key,
+                MultipartUpload* out,
                 std::size_t expected_total_size = 0,
                 const std::string& idempotency_key = {});
 

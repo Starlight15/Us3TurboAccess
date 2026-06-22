@@ -46,8 +46,8 @@ MetadataClient::RpcOpenTransferSession(const SessionOpening& request) const {
   us3_turbo_access::gateway::OpenSessionRequest rpc_request;
   rpc_request.set_request_id(request.request_id);
   rpc_request.set_session_id(request.session_id);
-  rpc_request.set_bucket(request.object.bucket);
-  rpc_request.set_object_key(request.object.key);
+  rpc_request.set_bucket(request.bucket);
+  rpc_request.set_object_key(request.key);
   rpc_request.set_op_type(std::string(ToString(request.operation)));
   rpc_request.set_data_flow(std::string(ToString(request.data_flow)));
   rpc_request.set_buffer_type(std::string(ToString(request.buffer_type)));
@@ -68,7 +68,8 @@ MetadataClient::RpcOpenTransferSession(const SessionOpening& request) const {
       std::move(rpc_response));
 }
 
-Result<ObjectMetadata> MetadataClient::HeadObject(const ObjectId& object) const {
+Result<ObjectMetadata> MetadataClient::HeadObject(const std::string& bucket,
+                                                  const std::string& key) const {
   if (!initialized()) {
     return Result<ObjectMetadata>::Failure(MakeNotInitialized("Metadata client"));
   }
@@ -83,8 +84,8 @@ Result<ObjectMetadata> MetadataClient::HeadObject(const ObjectId& object) const 
   ApplyRequestHeaders(controller, context);
 
   us3_turbo_access::gateway::HeadObjectRequest rpc_request;
-  rpc_request.set_bucket(object.bucket);
-  rpc_request.set_object_key(object.key);
+  rpc_request.set_bucket(bucket);
+  rpc_request.set_object_key(key);
 
   us3_turbo_access::gateway::HeadObjectResponse rpc_response;
   stub_->HeadObject(&controller, &rpc_request, &rpc_response, nullptr);
@@ -108,8 +109,8 @@ Result<ObjectMetadata> MetadataClient::HeadObject(const ObjectId& object) const 
 static us3_turbo_access::gateway::StartUploadRequest BuildStartUploadRequest(
     const ObjectDescriptor& desc) {
   us3_turbo_access::gateway::StartUploadRequest req;
-  req.set_bucket(desc.object.bucket);
-  req.set_object_key(desc.object.key);
+  req.set_bucket(desc.bucket);
+  req.set_object_key(desc.key);
   req.set_expected_total_size(
       static_cast<std::uint64_t>(desc.expected_total_size.value_or(0)));
   req.set_data_flow(std::string(ToString(desc.data_flow)));

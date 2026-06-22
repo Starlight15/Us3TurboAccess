@@ -13,10 +13,12 @@ class RdmaMultipartSession final : public IMultipartSession {
  public:
   RdmaMultipartSession(const MetadataClient& metadata,
                        const RdmaTransferPath& transfer_path,
-                       ObjectId object,
+                       std::string bucket,
+                       std::string key,
                        std::string upload_id,
                        std::size_t max_part_size)
-      : object_(std::move(object)),
+      : bucket_(std::move(bucket)),
+        key_(std::move(key)),
         upload_id_(std::move(upload_id)),
         max_part_size_(max_part_size),
         metadata_(metadata),
@@ -30,7 +32,8 @@ class RdmaMultipartSession final : public IMultipartSession {
                                      const std::string& checksum_policy,
                                      ConstBufferView buffer) override {
     PutObjectRequest request;
-    request.object          = object_;
+    request.bucket          = bucket_;
+    request.key             = key_;
     request.checksum_policy = checksum_policy;
     return transfer_path_.PutObjectPart(request, buffer, upload_id_, part_number);
   }
@@ -52,7 +55,8 @@ class RdmaMultipartSession final : public IMultipartSession {
   }
 
  private:
-  ObjectId                object_;
+  std::string             bucket_;
+  std::string             key_;
   std::string             upload_id_;
   std::size_t             max_part_size_;
   const MetadataClient&   metadata_;
@@ -73,7 +77,7 @@ Status RdmaMultipartFlow::CreateSession(const ObjectDescriptor& desc,
   auto r = metadata_.RpcCreateMultipartUpload(desc);
   if (!r.success()) return Status::FromError(r.error());
   *out = std::make_unique<RdmaMultipartSession>(
-      metadata_, transfer_path_, desc.object,
+      metadata_, transfer_path_, desc.bucket, desc.key,
       std::move(r.value().upload_id), r.value().max_part_size);
   return Status::Ok();
 }

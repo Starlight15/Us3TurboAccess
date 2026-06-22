@@ -108,8 +108,8 @@ int main(int argc, char** argv) {
   const std::size_t key_mod = a.key_modulo > 0 ? a.key_modulo : a.count;
   auto submit = [&](std::size_t idx) -> std::future<Result<TransferOutcome>> {
     PutObjectRequest req;
-    req.object = ObjectId{.bucket = a.bucket,
-                          .key = a.key_prefix + std::to_string(idx % key_mod)};
+    req.bucket = a.bucket;
+    req.key = a.key_prefix + std::to_string(idx % key_mod);
     return client.PutObjectAsync(req, buf_view);
   };
 

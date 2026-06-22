@@ -40,7 +40,8 @@ int main(int argc, char** argv) {
   }
 
   PutObjectRequest request;
-  request.object = ObjectId{.bucket = bucket, .key = object_key};
+  request.bucket = bucket;
+  request.key = object_key;
 
   auto put = client.PutObject(request,
       ConstBufferView{.data = raw, .size = bytes, .type = BufferType::kHostRegular});
@@ -52,7 +53,7 @@ int main(int argc, char** argv) {
             << " bytes=" << put.value().bytes_transferred
             << " etag=" << put.value().etag << std::endl;
 
-  auto head = client.HeadObject(request.object);
+  auto head = client.HeadObject(request.bucket, request.key);
   if (!head.success()) {
     std::cerr << "HeadObject failed: " << head.error().message << std::endl;
     return 1;
